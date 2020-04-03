@@ -149,4 +149,5 @@
             (enqueue item storage)
             (bt:with-lock-held (wait-lock)
               (bt:condition-notify wait-condvar))))
-      (decf (pool-active-count pool)))))
+      (decf (pool-active-count pool)))
+    (values)))
