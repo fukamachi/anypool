@@ -64,8 +64,8 @@
   (print-unreadable-object (object stream :type t :identity t)
     (format stream "~@[~S ~](OPEN=~A / IDLE=~A)"
             (pool-name object)
-            (pool-max-open-count object)
-            (pool-max-idle-count object))))
+            (pool-open-count object)
+            (pool-idle-count object))))
 
 (defun pool-idle-count (pool)
   (- (queue-count (pool-storage pool))
