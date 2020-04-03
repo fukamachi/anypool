@@ -48,7 +48,8 @@
       (ok (= (pool-idle-count pool) 0)))
 
     (testing "'putback' can return a fetched object back"
-      (ok (= (putback (pop active-objects) pool) 1))
+      (putback (pop active-objects) pool)
+      (ok (= (pool-active-count pool) 1))
       (ok (= (pool-open-count pool) 2))
       (ok (= (pool-active-count pool) 1))
       (ok (= (pool-idle-count pool) 1)))
