@@ -62,11 +62,25 @@
   (let ((pool (make-pool :name "test pool"
                          :connector (lambda () (get-internal-real-time))
                          :ping (lambda (item)
-                                 (< (+ item (/ internal-time-units-per-second 2))
-                                    (get-internal-real-time))))))
+                                 (< (get-internal-real-time)
+                                    (+ item (/ internal-time-units-per-second 2)))))))
     (let ((object (fetch pool)))
       (putback object pool)
       (ok (eq (fetch pool) object))
       (putback object pool)
       (sleep 0.5)
       (ng (eq (fetch pool) object)))))
+
+(deftest idle-timeout
+  (let ((pool (make-pool :name "test pool"
+                         :connector (lambda () (get-internal-real-time))
+                         :idle-timeout 100)))
+    (let ((object (fetch pool)))
+      (putback object pool)
+      (ok (eq (fetch pool) object))
+      (putback object pool)
+      (ok (= (pool-idle-count pool) 1))
+      (sleep 0.2)
+      (ok (= (pool-idle-count pool) 0))
+      (ng (eq (fetch pool) object))
+      (ok (= (pool-idle-count pool) 0)))))

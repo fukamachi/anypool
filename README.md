@@ -11,6 +11,7 @@ This software is still ALPHA quality. The APIs will be likely to change.
 - make-pool
 - pool-max-open-count
 - pool-max-idle-count
+- pool-idle-timeout
 - pool-open-count
 - pool-active-count
 - pool-idle-count
