@@ -24,7 +24,9 @@
                           :connector connector
                           :disconnector disconnector
                           :max-open-count 2
-                          :max-idle-count 1))
+                          :max-idle-count 1
+                          ;; Timeout immediately and raise an error
+                          :timeout 0))
          active-objects)
     (testing "'fetch' can allocate a new object"
       (push (fetch pool) active-objects)
@@ -40,7 +42,7 @@
       (ok (= (pool-idle-count pool) 0)))
 
     (testing "'fetch' can't allocate exceeding the max-open-count"
-      (ok (signals (fetch pool)))
+      (ok (signals (fetch pool) 'too-many-open-connection))
       (ok (= (pool-open-count pool) 2))
       (ok (= (pool-active-count pool) 2))
       (ok (= (pool-idle-count pool) 0)))
@@ -72,6 +74,8 @@
       (ng (eq (fetch pool) object)))))
 
 (deftest idle-timeout
+  #-sbcl (skip ":idle-timeout works only on SBCL")
+  #+sbcl
   (let ((pool (make-pool :name "test pool"
                          :connector (lambda () (get-internal-real-time))
                          :idle-timeout 100)))
@@ -84,3 +88,22 @@
       (ok (= (pool-idle-count pool) 0))
       (ng (eq (fetch pool) object))
       (ok (= (pool-idle-count pool) 0)))))
+
+(deftest timeout
+  (let ((pool (make-pool :name "test pool"
+                         :connector (lambda () (get-internal-real-time))
+                         :max-open-count 2
+                         :timeout 100)))
+    (let ((objects (list (fetch pool) (fetch pool))))
+      (ok (= (pool-open-count pool) 2))
+      (bt:make-thread
+        (lambda ()
+          (sleep 0.05)
+          (putback (pop objects) pool)))
+      (ok (fetch pool))
+
+      (bt:make-thread
+        (lambda ()
+          (sleep 0.2)
+          (putback (pop objects) pool)))
+      (ok (signals (fetch pool) 'too-many-open-connection)))))

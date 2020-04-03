@@ -23,7 +23,8 @@
            #:pool-idle-count
            #:pool-open-count
            #:fetch
-           #:putback))
+           #:putback
+           #:too-many-open-connection))
 (in-package #:anypool)
 
 (defvar *default-max-open-count* 4)
@@ -36,6 +37,7 @@
                         (ping (constantly t))
                         (max-open-count *default-max-open-count*)
                         (max-idle-count *default-max-idle-count*)
+                        timeout
                         idle-timeout
 
                    &aux (storage (make-queue (min max-open-count max-idle-count))))))
@@ -47,12 +49,16 @@
   max-open-count
   max-idle-count
   idle-timeout  ;; Works only on SBCL
+  timeout
 
   ;; Internal
   storage
   (active-count 0 :type fixnum)
   (timeout-in-queue-count 0 :type fixnum)
-  (lock (bt:make-lock "ANYPOOL-LOCK")))
+  (lock (bt:make-lock "ANYPOOL-LOCK"))
+
+  (wait-lock (bt:make-lock "ANYPOOL-OPENWAIT-LOCK"))
+  (wait-condvar (bt:make-condition-variable :name "ANYPOOL-OPENWAIT")))
 
 (defmethod print-object ((object pool) stream)
   (print-unreadable-object (object stream :type t :identity t)
@@ -74,18 +80,30 @@
   idle-timer
   (timeout-p nil))
 
+(define-condition anypool-error (error) ())
+(define-condition too-many-open-connection (anypool-error)
+  ((limit :initarg :limit))
+  (:report (lambda (condition stream)
+             (format stream "Too many open connection and couldn't open a new one (limit: ~A)"
+                     (slot-value condition 'limit)))))
+
 (defun fetch (pool)
-  (with-slots (connector disconnector ping storage lock) pool
+  (with-slots (connector disconnector ping storage lock timeout wait-lock wait-condvar) pool
     (flet ((allocate-new ()
-             ;; TODO: Wait until available
-             (assert (< (pool-open-count pool) (pool-max-open-count pool)))
-             (funcall connector)))
+             (funcall connector))
+           (can-open-p ()
+             (< (pool-open-count pool) (pool-max-open-count pool))))
       (declare (inline allocate-new))
-      (with-lock-held (lock)
-        (prog1
-            (loop
-              (if (queue-empty-p storage)
-                  (return (allocate-new))
+      (prog1
+          (loop
+            (if (queue-empty-p storage)
+                (if (can-open-p)
+                    (return (allocate-new))
+                    (bt:with-lock-held (wait-lock)
+                      (or (bt:condition-wait wait-condvar wait-lock :timeout (/ timeout 1000d0))
+                          (error 'too-many-open-connection
+                                 :limit (pool-max-open-count pool)))))
+                (with-lock-held (lock)
                   (let ((item (dequeue storage)))
                     (when (item-idle-timer item)
                       #+sbcl
@@ -98,8 +116,8 @@
                        (return (item-object item)))
                       (t
                        (when disconnector
-                         (funcall disconnector (item-object item))))))))
-          (incf (pool-active-count pool)))))))
+                         (funcall disconnector (item-object item)))))))))
+        (incf (pool-active-count pool))))))
 
 #+sbcl
 (defun make-idle-timer (item timeout-fn)
@@ -111,7 +129,7 @@
     :thread nil))
 
 (defun putback (conn pool)
-  (with-slots (disconnector storage lock idle-timeout) pool
+  (with-slots (disconnector storage lock idle-timeout wait-lock wait-condvar) pool
     (with-lock-held (lock)
       (if (queue-full-p storage)
           (when disconnector
@@ -128,5 +146,7 @@
                                          (funcall disconnector conn)))))
               (sb-ext:schedule-timer (item-idle-timer item)
                                      (/ idle-timeout 1000d0)))
-            (enqueue item storage)))
+            (enqueue item storage)
+            (bt:with-lock-held (wait-lock)
+              (bt:condition-notify wait-condvar))))
       (decf (pool-active-count pool)))))
