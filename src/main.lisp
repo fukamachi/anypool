@@ -10,7 +10,7 @@
                 #:dequeue
                 #:queue-count
                 #:queue-full-p
-                #:queue-empty-p)
+                #:queue-peek)
   (:export #:*default-max-open-count*
            #:*default-max-idle-count*
            #:pool
@@ -96,7 +96,7 @@
       (declare (inline allocate-new))
       (prog1
           (loop
-            (if (queue-empty-p storage)
+            (if (zerop (pool-idle-count pool))
                 (if (can-open-p)
                     (return (allocate-new))
                     (bt:with-lock-held (wait-lock)
@@ -128,26 +128,38 @@
         (funcall timeout-fn (item-object item))))
     :thread nil))
 
+(defun dequeue-timeout-resources (pool)
+  (with-slots (storage lock) pool
+    (loop
+      (with-lock-held (lock)
+        (let ((item (queue-peek storage)))
+          (when (or (null item)
+                    (not (item-timeout-p item)))
+            (return))
+          (dequeue storage))))))
+
 (defun putback (conn pool)
+  (dequeue-timeout-resources pool)
   (with-slots (disconnector storage lock idle-timeout wait-lock wait-condvar) pool
+    (if (queue-full-p storage)
+        (when disconnector
+          (funcall disconnector conn))
+        (let ((item (make-item conn)))
+          #+sbcl
+          (when idle-timeout
+            (setf (item-idle-timer item)
+                  (make-idle-timer item
+                                   (lambda (conn)
+                                     (with-lock-held (lock)
+                                       (incf (pool-timeout-in-queue-count pool)))
+                                     (when disconnector
+                                       (funcall disconnector conn)))))
+            (sb-ext:schedule-timer (item-idle-timer item)
+                                   (/ idle-timeout 1000d0)))
+          (with-lock-held (lock)
+            (enqueue item storage))
+          (bt:with-lock-held (wait-lock)
+            (bt:condition-notify wait-condvar))))
     (with-lock-held (lock)
-      (if (queue-full-p storage)
-          (when disconnector
-            (funcall disconnector conn))
-          (let ((item (make-item conn)))
-            #+sbcl
-            (when idle-timeout
-              (setf (item-idle-timer item)
-                    (make-idle-timer item
-                                     (lambda (conn)
-                                       (with-lock-held (lock)
-                                         (incf (pool-timeout-in-queue-count pool)))
-                                       (when disconnector
-                                         (funcall disconnector conn)))))
-              (sb-ext:schedule-timer (item-idle-timer item)
-                                     (/ idle-timeout 1000d0)))
-            (enqueue item storage)
-            (bt:with-lock-held (wait-lock)
-              (bt:condition-notify wait-condvar))))
       (decf (pool-active-count pool)))
     (values)))
