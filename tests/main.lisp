@@ -94,17 +94,17 @@
   (let ((pool (make-pool :name "test pool"
                          :connector (lambda () (get-internal-real-time))
                          :max-open-count 2
-                         :timeout 100)))
+                         :timeout 200)))
     (let ((objects (list (fetch pool) (fetch pool))))
       (ok (= (pool-open-count pool) 2))
       (bt:make-thread
         (lambda ()
-          (sleep 0.05)
+          (sleep 0.1)
           (putback (pop objects) pool)))
       (ok (fetch pool))
 
       (bt:make-thread
         (lambda ()
-          (sleep 0.2)
+          (sleep 0.3)
           (putback (pop objects) pool)))
       (ok (signals (fetch pool) 'too-many-open-connection)))))
