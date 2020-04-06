@@ -88,7 +88,7 @@
                      (slot-value condition 'limit)))))
 
 (defun fetch (pool)
-  (with-slots (connector disconnector ping storage lock timeout wait-lock wait-condvar) pool
+  (with-slots (connector ping storage lock timeout wait-lock wait-condvar) pool
     (flet ((allocate-new ()
              (funcall connector))
            (can-open-p ()
@@ -114,9 +114,8 @@
                       ((or (null ping)
                            (funcall ping (item-object item)))
                        (return (item-object item)))
-                      (t
-                       (when disconnector
-                         (funcall disconnector (item-object item)))))))))
+                      ;; Not available anymore. Just ignore
+                      (t))))))
         (bt:with-lock-held (lock)
           (incf (pool-active-count pool)))))))
 
