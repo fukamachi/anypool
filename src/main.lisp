@@ -117,7 +117,8 @@
                       (t
                        (when disconnector
                          (funcall disconnector (item-object item)))))))))
-        (incf (pool-active-count pool))))))
+        (bt:with-lock-held (lock)
+          (incf (pool-active-count pool)))))))
 
 #+sbcl
 (defun make-idle-timer (item timeout-fn)
