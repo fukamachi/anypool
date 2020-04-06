@@ -1,12 +1,6 @@
 name: CI
 
-on:
-  push:
-    paths: ['*']
-  pull_request:
-    paths: ['*']
-  schedule:
-    - cron: '0 15 * * *'
+on: push
 
 jobs:
   test:
