@@ -96,23 +96,26 @@
       (declare (inline allocate-new))
       (prog1
           (loop
-            (if (zerop (pool-idle-count pool))
-                (cond
-                  ((can-open-p)
-                   (return (allocate-new)))
-                  ((and (numberp timeout)
-                        (zerop timeout))
-                   (error 'too-many-open-connection
-                          :limit (pool-max-open-count pool)))
-                  (t
-                   (or #+ccl
-                       (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
-                       #-ccl
-                       (bt:with-lock-held (wait-lock)
-                         (bt:condition-wait wait-condvar wait-lock :timeout (/ timeout 1000d0)))
-                       (error 'too-many-open-connection
-                              :limit (pool-max-open-count pool)))))
-                (with-lock-held (lock)
+            (bt:with-lock-held (lock)
+              (if (zerop (pool-idle-count pool))
+                  (cond
+                    ((can-open-p)
+                     (return (allocate-new)))
+                    ((and (numberp timeout)
+                          (zerop timeout))
+                     (error 'too-many-open-connection
+                            :limit (pool-max-open-count pool)))
+                    (t
+                     (bt:release-lock lock)
+                     (unwind-protect
+                         (or #+ccl
+                             (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
+                             #-ccl
+                             (bt:with-lock-held (wait-lock)
+                               (bt:condition-wait wait-condvar wait-lock :timeout (/ timeout 1000d0)))
+                             (error 'too-many-open-connection
+                                    :limit (pool-max-open-count pool)))
+                       (bt:acquire-lock lock))))
                   (let ((item (dequeue storage)))
                     (when (item-idle-timer item)
                       #+sbcl
