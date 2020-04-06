@@ -8,8 +8,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        lisp: [sbcl-bin]
-        os: [ubuntu-latest, macOS-latest]
+        lisp: [sbcl-bin, ccl-bin]
+        os: [ubuntu-latest]
 
     steps:
       - uses: actions/checkout@v1
