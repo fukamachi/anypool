@@ -102,8 +102,9 @@
                   (cond
                     ((can-open-p)
                      (return (allocate-new)))
-                    ((and (numberp timeout)
-                          (zerop timeout))
+                    ((or (null timeout)
+                         (and (numberp timeout)
+                              (zerop timeout)))
                      (error 'too-many-open-connection
                             :limit (pool-max-open-count pool)))
                     (t
