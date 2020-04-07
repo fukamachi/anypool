@@ -42,6 +42,10 @@ This software is still ALPHA quality. The APIs will be likely to change.
 
 (pool-idle-count *connection-pool*)
 ;=> 1
+
+;; Using `with-connection` macro.
+(with-connection (mito:*connection* *connection-pool*)
+  (mito:find-dao 'user :name "fukamachi"))
 ```
 
 ## API

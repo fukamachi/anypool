@@ -24,7 +24,8 @@
            #:pool-open-count
            #:fetch
            #:putback
-           #:too-many-open-connection))
+           #:too-many-open-connection
+           #:with-connection))
 (in-package #:anypool)
 
 (defvar *default-max-open-count* 4)
@@ -175,3 +176,8 @@
     (with-lock-held (lock)
       (decf (pool-active-count pool)))
     (values)))
+
+(defmacro with-connection ((conn pool) &body body)
+  `(let ((,conn (fetch ,pool)))
+     (unwind-protect (progn ,@body)
+       (putback ,conn ,pool))))
