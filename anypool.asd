@@ -17,3 +17,7 @@
   ((:module "tests"
     :components ((:file "main"))))
   :perform (test-op (o c) (symbol-call :rove '#:run c)))
+
+(defsystem "anypool/middleware"
+  :depends-on ("anypool")
+  :components ((:file "src/middleware")))
