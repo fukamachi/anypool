@@ -25,6 +25,7 @@
            #:fetch
            #:putback
            #:too-many-open-connection
+           #:error-max-open-limit
            #:with-connection))
 (in-package #:anypool)
 
@@ -83,7 +84,8 @@
 
 (define-condition anypool-error (error) ())
 (define-condition too-many-open-connection (anypool-error)
-  ((limit :initarg :limit))
+  ((limit :initarg :limit
+          :reader error-max-open-limit))
   (:report (lambda (condition stream)
              (format stream "Too many open connection and couldn't open a new one (limit: ~A)"
                      (slot-value condition 'limit)))))
