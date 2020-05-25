@@ -1,7 +1,12 @@
 (defpackage #:anypool/tests
   (:use #:cl
         #:rove
-        #:anypool))
+        #:anypool)
+  (:import-from #:anypool
+                #:pool-storage
+                #:dequeue-timeout-resources)
+  (:import-from #:cl-speedy-queue
+                #:queue-count))
 (in-package #:anypool/tests)
 
 (deftest make-pool
@@ -87,6 +92,10 @@
       (ok (= (pool-idle-count pool) 1))
       (sleep 0.2)
       (ok (= (pool-idle-count pool) 0))
+      (ok (= (queue-count (pool-storage pool)) 1))
+      (dequeue-timeout-resources pool)
+      (ok (= (pool-idle-count pool) 0))
+      (ok (= (queue-count (pool-storage pool)) 0))
       (ng (eq (fetch pool) object))
       (ok (= (pool-idle-count pool) 0)))))
 

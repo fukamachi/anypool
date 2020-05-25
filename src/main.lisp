@@ -150,6 +150,7 @@
           (when (or (null item)
                     (not (item-timeout-p item)))
             (return))
+          (decf (pool-timeout-in-queue-count pool))
           (dequeue storage))))))
 
 (defun putback (conn pool)
