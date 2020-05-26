@@ -117,3 +117,15 @@
           (sleep 0.3)
           (putback (pop objects) pool)))
       (ok (signals (fetch pool) 'too-many-open-connection)))))
+
+(deftest disable-pooling
+  (let ((pool (make-pool :name "test pool"
+                         :connector (lambda () (get-internal-real-time))
+                         :max-open-count 4
+                         :max-idle-count 0)))
+    (let ((object (fetch pool)))
+      (ok (= (pool-open-count pool) 1))
+      (ok (= (pool-idle-count pool) 0))
+      (putback object pool)
+      (ok (= (pool-open-count pool) 0))
+      (ok (= (pool-idle-count pool) 0)))))

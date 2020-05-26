@@ -32,6 +32,23 @@
 (defvar *default-max-open-count* 4)
 (defvar *default-max-idle-count* 2)
 
+;;
+;; Wrap functions to support 0 length queues
+
+(defun make-queue* (size)
+  (if (zerop size)
+      (make-array 2 :initial-contents '(2 2))
+      (make-queue size)))
+
+(defun queue-peek* (queue)
+  (if (= (length queue) 2)
+      (values nil nil)
+      (queue-peek queue)))
+
+
+;;
+;; Main from here
+
 (defstruct (pool (:constructor make-pool
                   (&key name
                         connector
@@ -42,7 +59,7 @@
                         timeout
                         idle-timeout
 
-                   &aux (storage (make-queue (min max-open-count max-idle-count))))))
+                   &aux (storage (make-queue* (min max-open-count max-idle-count))))))
   name
   connector
   disconnector
@@ -148,7 +165,7 @@
   (with-slots (storage lock) pool
     (loop
       (with-lock-held (lock)
-        (let ((item (queue-peek storage)))
+        (let ((item (queue-peek* storage)))
           (when (or (null item)
                     (not (item-timeout-p item)))
             (return))
