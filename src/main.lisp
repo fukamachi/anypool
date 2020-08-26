@@ -159,7 +159,7 @@
       (unless (item-timeout-p item)
         (setf (item-timeout-p item) t)
         (funcall timeout-fn (item-object item))))
-    :thread nil))
+    :thread t))
 
 (defun dequeue-timeout-resources (pool)
   (with-slots (storage lock) pool
