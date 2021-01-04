@@ -199,6 +199,8 @@
     (values)))
 
 (defmacro with-connection ((conn pool) &body body)
-  `(let ((,conn (fetch ,pool)))
-     (unwind-protect (progn ,@body)
-       (putback ,conn ,pool))))
+  (let ((g-pool (gensym "POOL")))
+    `(let* ((,g-pool ,pool)
+            (,conn (fetch ,g-pool)))
+       (unwind-protect (progn ,@body)
+         (putback ,conn ,g-pool)))))
