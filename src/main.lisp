@@ -157,7 +157,6 @@
   (sb-ext:make-timer
     (lambda ()
       (unless (item-timeout-p item)
-        (setf (item-timeout-p item) t)
         (funcall timeout-fn (item-object item))))
     :thread t))
 
@@ -185,6 +184,7 @@
                   (make-idle-timer item
                                    (lambda (conn)
                                      (with-lock-held (lock)
+                                       (setf (item-timeout-p item) t)
                                        (incf (pool-timeout-in-queue-count pool)))
                                      (when disconnector
                                        (funcall disconnector conn)))))
