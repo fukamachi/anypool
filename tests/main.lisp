@@ -97,7 +97,23 @@
       (ok (= (pool-idle-count pool) 0))
       (ok (= (queue-count (pool-storage pool)) 0))
       (ng (eq (fetch pool) object))
-      (ok (= (pool-idle-count pool) 0)))))
+      (ok (= (pool-idle-count pool) 0))))
+
+  #+sbcl
+  (let ((pool (make-pool :name "test pool"
+                         :connector (lambda () (get-internal-real-time))
+                         :max-open-count 20
+                         :max-idle-count 20
+                         :idle-timeout 1)))
+    (loop repeat 10
+          do
+          (bt:make-thread
+            (lambda ()
+              (loop
+                repeat 1000
+                do (let ((object (fetch pool)))
+                     (putback object pool))))))
+    (pass "passed")))
 
 (deftest timeout
   (let ((pool (make-pool :name "test pool"
