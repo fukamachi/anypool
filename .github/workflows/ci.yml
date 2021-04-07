@@ -4,25 +4,15 @@ on: push
 
 jobs:
   test:
-    name: ${{ matrix.lisp }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.lisp }} on ubuntu-latest
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        lisp: [sbcl-bin, ccl-bin]
-        os: [ubuntu-latest]
+        lisp: [sbcl, ccl]
 
     steps:
       - uses: actions/checkout@v1
-      - name: Install Roswell
+      - name: Run tests
         env:
           LISP: ${{ matrix.lisp }}
-        run: |
-          curl -L https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | sh
-      - name: Install Ultralisp
-        run: ros -e '(ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)'
-      - name: Install Rove
-        run: ros install fukamachi/rove
-      - name: Run tests
-        run: |
-          PATH="~/.roswell/bin:$PATH"
-          rove anypool.asd
+        run: make
