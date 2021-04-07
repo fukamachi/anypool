@@ -138,9 +138,12 @@
                                     :limit (pool-max-open-count pool)))
                        (bt:acquire-lock lock))))
                   (let ((item (dequeue storage)))
+                    #+sbcl
                     (when (item-idle-timer item)
-                      #+sbcl
-                      (sb-ext:unschedule-timer (item-idle-timer item)))
+                      ;; Release the lock once to prevent from deadlock
+                      (bt:release-lock lock)
+                      (sb-ext:unschedule-timer (item-idle-timer item))
+                      (bt:acquire-lock lock))
                     (cond
                       ((item-timeout-p item)
                        (decf (pool-timeout-in-queue-count pool)))
