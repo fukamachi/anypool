@@ -97,6 +97,7 @@
 (defstruct (item (:constructor make-item (object)))
   object
   idle-timer
+  (active-p nil)
   (timeout-p nil))
 
 (define-condition anypool-error (error) ())
@@ -138,6 +139,7 @@
                                     :limit (pool-max-open-count pool)))
                        (bt:acquire-lock lock))))
                   (let ((item (dequeue storage)))
+                    (setf (item-active-p item) t)
                     #+sbcl
                     (when (item-idle-timer item)
                       ;; Release the lock once to prevent from deadlock
@@ -181,6 +183,7 @@
     (unwind-protect
         (if (queue-full-p storage)
             (progn
+              (decf (pool-active-count pool))
               (bt:release-lock lock)
               (when disconnector
                 (funcall disconnector conn)))
@@ -191,19 +194,20 @@
                       (make-idle-timer item
                                        (lambda (conn)
                                          (with-lock-held (lock)
-                                           (setf (item-timeout-p item) t)
-                                           (incf (pool-timeout-in-queue-count pool)))
-                                         (when disconnector
-                                           (funcall disconnector conn)))))
+                                           (unless (item-active-p item)
+                                             (setf (item-timeout-p item) t)
+                                             (incf (pool-timeout-in-queue-count pool))))
+                                         (unless (item-active-p item)
+                                           (when disconnector
+                                             (funcall disconnector conn))))))
                 (sb-ext:schedule-timer (item-idle-timer item)
                                        (/ idle-timeout 1000d0)))
               (enqueue item storage)
+              (decf (pool-active-count pool))
               (bt:release-lock lock)
               (bt:with-lock-held (wait-lock)
                 (bt:condition-notify wait-condvar))))
       (bt:release-lock lock))
-    (with-lock-held (lock)
-      (decf (pool-active-count pool)))
     (values)))
 
 (defmacro with-connection ((conn pool) &body body)
