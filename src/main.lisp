@@ -193,13 +193,16 @@
                 (setf (item-idle-timer item)
                       (make-idle-timer item
                                        (lambda (conn)
-                                         (with-lock-held (lock)
-                                           (unless (item-active-p item)
-                                             (setf (item-timeout-p item) t)
-                                             (incf (pool-timeout-in-queue-count pool))))
-                                         (unless (item-active-p item)
-                                           (when disconnector
-                                             (funcall disconnector conn))))))
+                                         (let ((activep
+                                                 (with-lock-held (lock)
+                                                   (let ((activep (item-active-p item)))
+                                                     (unless activep
+                                                       (setf (item-timeout-p item) t)
+                                                       (incf (pool-timeout-in-queue-count pool)))
+                                                     activep))))
+                                           (unless activep
+                                             (when disconnector
+                                               (funcall disconnector conn)))))))
                 (sb-ext:schedule-timer (item-idle-timer item)
                                        (/ idle-timeout 1000d0)))
               (enqueue item storage)
