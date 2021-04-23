@@ -115,47 +115,46 @@
            (can-open-p ()
              (< (pool-open-count pool) (pool-max-open-count pool))))
       (declare (inline allocate-new))
-      (prog1
-          (loop
-            (bt:with-lock-held (lock)
-              (if (zerop (pool-idle-count pool))
-                  (cond
-                    ((can-open-p)
-                     (return (allocate-new)))
-                    ((or (null timeout)
-                         (and (numberp timeout)
-                              (zerop timeout)))
-                     (error 'too-many-open-connection
-                            :limit (pool-max-open-count pool)))
-                    (t
-                     (bt:release-lock lock)
-                     (unwind-protect
-                         (or #+ccl
-                             (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
-                             #-ccl
-                             (bt:with-lock-held (wait-lock)
-                               (bt:condition-wait wait-condvar wait-lock :timeout (/ timeout 1000d0)))
-                             (error 'too-many-open-connection
-                                    :limit (pool-max-open-count pool)))
-                       (bt:acquire-lock lock))))
-                  (let ((item (dequeue storage)))
-                    (setf (item-active-p item) t)
-                    #+sbcl
-                    (when (item-idle-timer item)
-                      ;; Release the lock once to prevent from deadlock
-                      (bt:release-lock lock)
-                      (sb-ext:unschedule-timer (item-idle-timer item))
-                      (bt:acquire-lock lock))
-                    (cond
-                      ((item-timeout-p item)
-                       (decf (pool-timeout-in-queue-count pool)))
-                      ((or (null ping)
-                           (funcall ping (item-object item)))
-                       (return (item-object item)))
-                      ;; Not available anymore. Just ignore
-                      (t))))))
+      (loop
         (bt:with-lock-held (lock)
-          (incf (pool-active-count pool)))))))
+          (if (zerop (pool-idle-count pool))
+              (cond
+                ((can-open-p)
+                 (incf (pool-active-count pool))
+                 (return (allocate-new)))
+                ((or (null timeout)
+                     (and (numberp timeout)
+                          (zerop timeout)))
+                 (error 'too-many-open-connection
+                        :limit (pool-max-open-count pool)))
+                (t
+                 (bt:release-lock lock)
+                 (unwind-protect
+                     (or #+ccl
+                         (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
+                         #-ccl
+                         (bt:with-lock-held (wait-lock)
+                           (bt:condition-wait wait-condvar wait-lock :timeout (/ timeout 1000d0)))
+                         (error 'too-many-open-connection
+                                :limit (pool-max-open-count pool)))
+                   (bt:acquire-lock lock))))
+              (let ((item (dequeue storage)))
+                (setf (item-active-p item) t)
+                (incf (pool-active-count pool))
+                #+sbcl
+                (when (item-idle-timer item)
+                  ;; Release the lock once to prevent from deadlock
+                  (bt:release-lock lock)
+                  (sb-ext:unschedule-timer (item-idle-timer item))
+                  (bt:acquire-lock lock))
+                (cond
+                  ((item-timeout-p item)
+                   (decf (pool-timeout-in-queue-count pool)))
+                  ((or (null ping)
+                       (funcall ping (item-object item)))
+                   (return (item-object item)))
+                  ;; Not available anymore. Just ignore
+                  (t)))))))))
 
 #+sbcl
 (defun make-idle-timer (item timeout-fn)
