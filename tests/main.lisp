@@ -66,6 +66,17 @@
       (ok (= (pool-active-count pool) 0))
       (ok (= (pool-idle-count pool) 1)))))
 
+#|
+(deftest wait-forever
+  (let ((pool (make-pool :name "test pool"
+                         :connector #'get-internal-real-time
+                         :max-open-count 1
+                         :timeout nil)))
+    (fetch pool)
+    (fetch pool)
+    (fail "wait forever")))
+|#
+
 (deftest ping
   (let ((pool (make-pool :name "test pool"
                          :connector (lambda () (get-internal-real-time))

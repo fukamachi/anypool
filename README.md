@@ -101,7 +101,7 @@ Return the number of currently idle connections.
 
 Return an available resource from the `pool`. If no open resources available, it makes a new one with a function specified to `make-pool` as `:connector`.
 
-No open resource available and can't open due to the `max-open-count`, this function waits for `:timeout` milliseconds. If `:timeout` specified to `nil`, this throws `too-many-open-connection` condition.
+No open resource available and can't open due to the `max-open-count`, this function waits for `:timeout` milliseconds. If `:timeout` specified to `nil`, this waits forever until a new one turns to available.
 
 ### [Function] putback (object pool)
 
