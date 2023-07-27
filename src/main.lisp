@@ -139,8 +139,6 @@
                                 :limit (pool-max-open-count pool)))
                    (bt:acquire-lock lock))))
               (let ((item (dequeue storage)))
-                (setf (item-active-p item) t)
-                (incf (pool-active-count pool))
                 #+sbcl
                 (when (item-idle-timer item)
                   ;; Release the lock once to prevent from deadlock
@@ -152,6 +150,8 @@
                    (decf (pool-timeout-in-queue-count pool)))
                   ((or (null ping)
                        (funcall ping (item-object item)))
+                   (setf (item-active-p item) t)
+                   (incf (pool-active-count pool))
                    (return (item-object item)))
                   ;; Not available anymore. Just ignore
                   (t)))))))))

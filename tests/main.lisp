@@ -100,19 +100,20 @@
       (ok (= (pool-idle-count pool) 0))))
 
   #+sbcl
-  (let ((pool (make-pool :name "test pool"
-                         :connector (lambda () (get-internal-real-time))
-                         :max-open-count 20
-                         :max-idle-count 20
-                         :idle-timeout 1)))
-    (loop repeat 10
-          do
-          (bt:make-thread
-            (lambda ()
-              (loop
-                repeat 1000
-                do (let ((object (fetch pool)))
-                     (putback object pool))))))
+  (let* ((pool (make-pool :name "test pool"
+                          :connector (lambda () (get-internal-real-time))
+                          :max-open-count 20
+                          :max-idle-count 20
+                          :idle-timeout 1))
+         (threads (loop repeat 20
+                        collect (bt:make-thread
+                                 (lambda ()
+                                   (loop
+                                     repeat 1000
+                                     do (let ((object (fetch pool)))
+                                          (putback object pool))))))))
+    (dolist (thread threads)
+      (bt:join-thread thread))
     (pass "passed")))
 
 (deftest timeout
