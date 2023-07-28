@@ -122,19 +122,21 @@
                 ((can-open-p)
                  (incf (pool-active-count pool))
                  (return (allocate-new)))
-                ((or (null timeout)
-                     (and (numberp timeout)
-                          (zerop timeout)))
+                ((and (numberp timeout)
+                      (zerop timeout))
                  (error 'too-many-open-connection
                         :limit (pool-max-open-count pool)))
                 (t
                  (bt:release-lock lock)
                  (unwind-protect
                      (or #+ccl
-                         (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
+                         (if timeout
+                             (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
+                             (ccl:wait-on-semaphore wait-condvar))
                          #-ccl
                          (bt:with-lock-held (wait-lock)
-                           (bt:condition-wait wait-condvar wait-lock :timeout (/ timeout 1000d0)))
+                           (bt:condition-wait wait-condvar wait-lock :timeout (and timeout
+                                                                                   (/ timeout 1000d0))))
                          (error 'too-many-open-connection
                                 :limit (pool-max-open-count pool)))
                    (bt:acquire-lock lock))))
