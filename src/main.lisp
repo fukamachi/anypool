@@ -74,10 +74,10 @@
   storage
   (active-count 0 :type fixnum)
   (timeout-in-queue-count 0 :type fixnum)
-  (lock (bt:make-lock "ANYPOOL-LOCK"))
+  (lock (bt2:make-lock :name "ANYPOOL-LOCK"))
 
-  (wait-lock (bt:make-lock "ANYPOOL-OPENWAIT-LOCK"))
-  (wait-condvar (bt:make-condition-variable :name "ANYPOOL-OPENWAIT")))
+  (wait-lock (bt2:make-lock :name "ANYPOOL-OPENWAIT-LOCK"))
+  (wait-condvar (bt2:make-condition-variable :name "ANYPOOL-OPENWAIT")))
 
 (defmethod print-object ((object pool) stream)
   (print-unreadable-object (object stream :type t :identity t)
@@ -116,7 +116,7 @@
              (< (pool-open-count pool) (pool-max-open-count pool))))
       (declare (inline allocate-new))
       (loop
-        (bt:with-lock-held (lock)
+        (bt2:with-lock-held (lock)
           (if (zerop (pool-idle-count pool))
               (cond
                 ((can-open-p)
@@ -127,26 +127,26 @@
                  (error 'too-many-open-connection
                         :limit (pool-max-open-count pool)))
                 (t
-                 (bt:release-lock lock)
+                 (bt2:release-lock lock)
                  (unwind-protect
                      (or #+ccl
                          (if timeout
                              (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
                              (ccl:wait-on-semaphore wait-condvar))
                          #-ccl
-                         (bt:with-lock-held (wait-lock)
-                           (bt:condition-wait wait-condvar wait-lock :timeout (and timeout
-                                                                                   (/ timeout 1000d0))))
+                         (bt2:with-lock-held (wait-lock)
+                           (bt2:condition-wait wait-condvar wait-lock :timeout (and timeout
+                                                                                    (/ timeout 1000d0))))
                          (error 'too-many-open-connection
                                 :limit (pool-max-open-count pool)))
-                   (bt:acquire-lock lock))))
+                   (bt2:acquire-lock lock))))
               (let ((item (dequeue storage)))
                 #+sbcl
                 (when (item-idle-timer item)
                   ;; Release the lock once to prevent from deadlock
-                  (bt:release-lock lock)
+                  (bt2:release-lock lock)
                   (sb-ext:unschedule-timer (item-idle-timer item))
-                  (bt:acquire-lock lock))
+                  (bt2:acquire-lock lock))
                 (cond
                   ((item-timeout-p item)
                    (decf (pool-timeout-in-queue-count pool)))
@@ -180,12 +180,12 @@
 (defun putback (conn pool)
   (dequeue-timeout-resources pool)
   (with-slots (disconnector storage lock idle-timeout wait-lock wait-condvar) pool
-    (bt:acquire-lock lock)
+    (bt2:acquire-lock lock)
     (unwind-protect
         (if (queue-full-p storage)
             (progn
               (decf (pool-active-count pool))
-              (bt:release-lock lock)
+              (bt2:release-lock lock)
               (when disconnector
                 (funcall disconnector conn)))
             (let ((item (make-item conn)))
@@ -208,10 +208,10 @@
                                        (/ idle-timeout 1000d0)))
               (enqueue item storage)
               (decf (pool-active-count pool))
-              (bt:release-lock lock)
-              (bt:with-lock-held (wait-lock)
-                (bt:condition-notify wait-condvar))))
-      (bt:release-lock lock))
+              (bt2:release-lock lock)
+              (bt2:with-lock-held (wait-lock)
+                (bt2:condition-notify wait-condvar))))
+      (bt2:release-lock lock))
     (values)))
 
 (defmacro with-connection ((conn pool) &body body)

@@ -117,14 +117,14 @@
                           :max-idle-count 20
                           :idle-timeout 1))
          (threads (loop repeat 20
-                        collect (bt:make-thread
+                        collect (bt2:make-thread
                                  (lambda ()
                                    (loop
                                      repeat 1000
                                      do (let ((object (fetch pool)))
                                           (putback object pool))))))))
     (dolist (thread threads)
-      (bt:join-thread thread))
+      (bt2:join-thread thread))
     (pass "passed")))
 
 (deftest timeout
@@ -134,13 +134,13 @@
                          :timeout 200)))
     (let ((objects (list (fetch pool) (fetch pool))))
       (ok (= (pool-open-count pool) 2))
-      (bt:make-thread
+      (bt2:make-thread
         (lambda ()
           (sleep 0.1)
           (putback (pop objects) pool)))
       (ok (fetch pool))
 
-      (bt:make-thread
+      (bt2:make-thread
         (lambda ()
           (sleep 0.3)
           (putback (pop objects) pool)))
