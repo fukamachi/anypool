@@ -1,9 +1,7 @@
 (defpackage #:anypool
   (:nicknames #:anypool/main)
   (:use #:cl)
-  (:import-from #:bordeaux-threads
-                #:make-lock
-                #:with-lock-held)
+  (:import-from #:bordeaux-threads)
   (:import-from #:cl-speedy-queue
                 #:make-queue
                 #:enqueue
@@ -169,7 +167,7 @@
 (defun dequeue-timeout-resources (pool)
   (with-slots (storage lock) pool
     (loop
-      (with-lock-held (lock)
+      (bt2:with-lock-held (lock)
         (let ((item (queue-peek* storage)))
           (when (or (null item)
                     (not (item-timeout-p item)))
@@ -195,7 +193,7 @@
                       (make-idle-timer item
                                        (lambda (conn)
                                          (let ((activep
-                                                 (with-lock-held (lock)
+                                                 (bt2:with-lock-held (lock)
                                                    (let ((activep (item-active-p item)))
                                                      (unless activep
                                                        (setf (item-timeout-p item) t)
