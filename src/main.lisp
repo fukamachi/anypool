@@ -118,8 +118,8 @@
           (if (zerop (pool-idle-count pool))
               (cond
                 ((can-open-p)
-                 (incf (pool-active-count pool))
-                 (return (allocate-new)))
+                 (return (prog1 (allocate-new)
+                           (incf (pool-active-count pool)))))
                 ((and (numberp timeout)
                       (zerop timeout))
                  (error 'too-many-open-connection
