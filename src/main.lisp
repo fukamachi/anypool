@@ -179,11 +179,13 @@
   (dequeue-timeout-resources pool)
   (with-slots (disconnector storage lock idle-timeout wait-lock wait-condvar) pool
     (bt2:acquire-lock lock)
-    (unwind-protect
+    (let (lock-released)
+      (unwind-protect
         (if (queue-full-p storage)
             (progn
               (decf (pool-active-count pool))
               (bt2:release-lock lock)
+              (setf lock-released t)
               (when disconnector
                 (funcall disconnector conn)))
             (let ((item (make-item conn)))
@@ -207,9 +209,11 @@
               (enqueue item storage)
               (decf (pool-active-count pool))
               (bt2:release-lock lock)
+              (setf lock-released t)
               (bt2:with-lock-held (wait-lock)
                 (bt2:condition-notify wait-condvar))))
-      (bt2:release-lock lock))
+      (unless lock-released
+        (bt2:release-lock lock))))
     (values)))
 
 (defmacro with-connection ((conn pool) &body body)
