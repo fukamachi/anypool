@@ -31,9 +31,6 @@
 (defvar *default-max-open-count* 4)
 (defvar *default-max-idle-count* 2)
 
-;;
-;; Wrap functions to support 0 length queues
-
 (defun make-queue* (size)
   (if (zerop size)
       (make-array 2 :initial-contents '(2 2))
@@ -43,9 +40,6 @@
   (if (= (length queue) 2)
       (values nil nil)
       (queue-peek queue)))
-
-;;
-;; Base pool structure with common slots
 
 (defstruct (pool (:constructor nil))  ; Don't generate constructor for base struct
   name
@@ -64,31 +58,22 @@
   (wait-lock (bt2:make-lock :name "ANYPOOL-OPENWAIT-LOCK"))
   (wait-condvar (bt2:make-condition-variable :name "ANYPOOL-OPENWAIT")))
 
-;;
-;; Specialized pool structures
-
-;; Pool without idle-timeout: stores raw objects
 (defstruct (pool-without-timeout
             (:include pool)
             (:conc-name pool-)
             (:constructor %make-pool-without-timeout)))
 
-;; Pool with idle-timeout: stores item structs, needs timeout tracking
 (defstruct (pool-with-timeout
             (:include pool)
             (:conc-name pool-)
             (:constructor %make-pool-with-timeout))
   (timeout-in-queue-count 0 :type fixnum))
 
-;; Item struct - only used by pool-with-timeout
 (defstruct (item (:constructor make-item (object)))
   object
   idle-timer
   (active-p nil)
   (timeout-p nil))
-
-;;
-;; Print-object method - unified for all pool types
 
 (defmethod print-object ((object pool) stream)
   (print-unreadable-object (object stream :type t :identity t)
@@ -96,9 +81,6 @@
             (pool-name object)
             (pool-open-count object)
             (pool-idle-count object))))
-
-;;
-;; Pool statistics functions
 
 (defun pool-idle-count (pool)
   (etypecase pool
@@ -119,9 +101,6 @@
       (max 0 (- (pool-active-count pool)
                 (pool-max-open-count pool)))))
 
-;;
-;; Error conditions
-
 (define-condition anypool-error (error) ())
 (define-condition too-many-open-connection (anypool-error)
   ((limit :initarg :limit
@@ -129,9 +108,6 @@
   (:report (lambda (condition stream)
              (format stream "Too many open connection and couldn't open a new one (limit: ~A)"
                      (slot-value condition 'limit)))))
-
-;;
-;; Pool constructor
 
 (defun make-pool (&key name
                        connector
@@ -169,55 +145,57 @@
          :timeout timeout
          :storage storage))))
 
-;;
-;; Internal fetch implementation for pool-without-timeout
+(defmacro define-fetch-impl (name pool-type &key idle-check dequeue-and-validate)
+  "Generate a fetch implementation with type-specific logic."
+  `(defun ,name (pool)
+     (declare (type ,pool-type pool))
+     (with-slots (connector ping storage lock timeout unlimited-p wait-lock wait-condvar) pool
+       (flet ((allocate-new ()
+                (funcall connector))
+              (can-open-p ()
+                (or unlimited-p
+                    (< (pool-open-count pool) (pool-max-open-count pool)))))
+         (declare (inline allocate-new))
+         (loop
+           (bt2:with-lock-held (lock)
+             (if ,idle-check
+                 ;; Common wait-or-allocate logic
+                 (cond
+                   ((can-open-p)
+                    (return (prog1 (allocate-new)
+                              (incf (pool-active-count pool)))))
+                   ((and (numberp timeout)
+                         (zerop timeout))
+                    (error 'too-many-open-connection
+                           :limit (pool-max-open-count pool)))
+                   (t
+                    (bt2:release-lock lock)
+                    (unwind-protect
+                        (or #+ccl
+                            (if timeout
+                                (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
+                                (ccl:wait-on-semaphore wait-condvar))
+                            #-ccl
+                            (bt2:with-lock-held (wait-lock)
+                              (bt2:condition-wait wait-condvar wait-lock
+                                                 :timeout (and timeout (/ timeout 1000d0))))
+                            (error 'too-many-open-connection
+                                   :limit (pool-max-open-count pool)))
+                      (bt2:acquire-lock lock))))
+                 ;; Type-specific dequeue and validation
+                 ,dequeue-and-validate)))))))
 
-(defun %fetch-without-timeout (pool)
-  (declare (type pool-without-timeout pool))
-  (with-slots (connector ping storage lock timeout unlimited-p wait-lock wait-condvar) pool
-    (flet ((allocate-new ()
-             (funcall connector))
-           (can-open-p ()
-             (or unlimited-p
-                 (< (pool-open-count pool) (pool-max-open-count pool)))))
-      (declare (inline allocate-new))
-      (loop
-        (bt2:with-lock-held (lock)
-          (if (zerop (queue-count storage))  ;; Direct queue-count, no subtraction
-              (cond
-                ((can-open-p)
-                 (return (prog1 (allocate-new)
-                           (incf (pool-active-count pool)))))
-                ((and (numberp timeout)
-                      (zerop timeout))
-                 (error 'too-many-open-connection
-                        :limit (pool-max-open-count pool)))
-                (t
-                 (bt2:release-lock lock)
-                 (unwind-protect
-                     (or #+ccl
-                         (if timeout
-                             (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
-                             (ccl:wait-on-semaphore wait-condvar))
-                         #-ccl
-                         (bt2:with-lock-held (wait-lock)
-                           (bt2:condition-wait wait-condvar wait-lock :timeout (and timeout
-                                                                                    (/ timeout 1000d0))))
-                         (error 'too-many-open-connection
-                                :limit (pool-max-open-count pool)))
-                   (bt2:acquire-lock lock))))
-              ;; Queue has objects - raw objects, no item wrapping
-              (let ((conn (dequeue storage)))
-                (cond
-                  ((or (null ping)
-                       (funcall ping conn))
-                   (incf (pool-active-count pool))
-                   (return conn))
-                  ;; Ping failed, discard and continue
-                  (t)))))))))
-
-;;
-;; Internal fetch implementation for pool-with-timeout
+(define-fetch-impl %fetch-without-timeout pool-without-timeout
+  :idle-check (zerop (queue-count storage))
+  :dequeue-and-validate
+  (let ((conn (dequeue storage)))
+    (cond
+      ((or (null ping)
+           (funcall ping conn))
+       (incf (pool-active-count pool))
+       (return conn))
+      ;; Ping failed, discard and continue
+      (t))))
 
 #+sbcl
 (defun make-idle-timer (item timeout-fn)
@@ -227,61 +205,26 @@
         (funcall timeout-fn (item-object item))))
     :thread t))
 
-(defun %fetch-with-timeout (pool)
-  (declare (type pool-with-timeout pool))
-  (with-slots (connector ping storage lock timeout unlimited-p wait-lock wait-condvar) pool
-    (flet ((allocate-new ()
-             (funcall connector))
-           (can-open-p ()
-             (or unlimited-p
-                 (< (pool-open-count pool) (pool-max-open-count pool)))))
-      (declare (inline allocate-new))
-      (loop
-        (bt2:with-lock-held (lock)
-          (if (zerop (pool-idle-count pool))  ;; Uses subtraction for timeout tracking
-              (cond
-                ((can-open-p)
-                 (return (prog1 (allocate-new)
-                           (incf (pool-active-count pool)))))
-                ((and (numberp timeout)
-                      (zerop timeout))
-                 (error 'too-many-open-connection
-                        :limit (pool-max-open-count pool)))
-                (t
-                 (bt2:release-lock lock)
-                 (unwind-protect
-                     (or #+ccl
-                         (if timeout
-                             (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
-                             (ccl:wait-on-semaphore wait-condvar))
-                         #-ccl
-                         (bt2:with-lock-held (wait-lock)
-                           (bt2:condition-wait wait-condvar wait-lock :timeout (and timeout
-                                                                                    (/ timeout 1000d0))))
-                         (error 'too-many-open-connection
-                                :limit (pool-max-open-count pool)))
-                   (bt2:acquire-lock lock))))
-              ;; Queue has items - wrapped in item struct
-              (let ((item (dequeue storage)))
-                #+sbcl
-                (when (item-idle-timer item)
-                  ;; Release the lock once to prevent from deadlock
-                  (bt2:release-lock lock)
-                  (sb-ext:unschedule-timer (item-idle-timer item))
-                  (bt2:acquire-lock lock))
-                (cond
-                  ((item-timeout-p item)
-                   (decf (pool-timeout-in-queue-count pool)))
-                  ((or (null ping)
-                       (funcall ping (item-object item)))
-                   (setf (item-active-p item) t)
-                   (incf (pool-active-count pool))
-                   (return (item-object item)))
-                  ;; Not available anymore. Just ignore
-                  (t)))))))))
-
-;;
-;; Public fetch API - dispatches based on pool type
+(define-fetch-impl %fetch-with-timeout pool-with-timeout
+  :idle-check (zerop (pool-idle-count pool))
+  :dequeue-and-validate
+  (let ((item (dequeue storage)))
+    #+sbcl
+    (when (item-idle-timer item)
+      ;; Release the lock once to prevent from deadlock
+      (bt2:release-lock lock)
+      (sb-ext:unschedule-timer (item-idle-timer item))
+      (bt2:acquire-lock lock))
+    (cond
+      ((item-timeout-p item)
+       (decf (pool-timeout-in-queue-count pool)))
+      ((or (null ping)
+           (funcall ping (item-object item)))
+       (setf (item-active-p item) t)
+       (incf (pool-active-count pool))
+       (return (item-object item)))
+      ;; Not available anymore. Just ignore
+      (t))))
 
 (defun fetch (pool)
   "Fetch a connection from the pool."
@@ -289,32 +232,28 @@
     (pool-without-timeout (%fetch-without-timeout pool))
     (pool-with-timeout (%fetch-with-timeout pool))))
 
-;;
-;; Internal putback implementation for pool-without-timeout
-
-(defun %putback-without-timeout (conn pool)
-  (declare (type pool-without-timeout pool))
-  (with-slots (disconnector storage lock wait-lock wait-condvar) pool
-    (bt2:acquire-lock lock)
-    (unwind-protect
-        (if (queue-full-p storage)
-            (progn
-              (decf (pool-active-count pool))
-              (bt2:release-lock lock)
-              (when disconnector
-                (funcall disconnector conn)))
-            (progn
-              ;; Store raw object directly - no item wrapping
-              (enqueue conn storage)
-              (decf (pool-active-count pool))
-              (bt2:release-lock lock)
-              (bt2:with-lock-held (wait-lock)
-                (bt2:condition-notify wait-condvar))))
-      (bt2:release-lock lock))
-    (values)))
-
-;;
-;; Internal putback implementation for pool-with-timeout
+(defmacro define-putback-impl (name pool-type &key before-putback enqueue-logic)
+  "Generate a putback implementation with type-specific logic."
+  `(defun ,name (conn pool)
+     (declare (type ,pool-type pool))
+     ,@(when before-putback (list before-putback))
+     (with-slots (disconnector storage lock wait-lock wait-condvar) pool
+       (bt2:acquire-lock lock)
+       (unwind-protect
+           (if (queue-full-p storage)
+               (progn
+                 (decf (pool-active-count pool))
+                 (bt2:release-lock lock)
+                 (when disconnector
+                   (funcall disconnector conn)))
+               (progn
+                 ,enqueue-logic
+                 (decf (pool-active-count pool))
+                 (bt2:release-lock lock)
+                 (bt2:with-lock-held (wait-lock)
+                   (bt2:condition-notify wait-condvar))))
+         (bt2:release-lock lock))
+       (values))))
 
 (defun dequeue-timeout-resources (pool)
   (declare (type pool-with-timeout pool))
@@ -328,56 +267,39 @@
           (decf (pool-timeout-in-queue-count pool))
           (dequeue storage))))))
 
-(defun %putback-with-timeout (conn pool)
-  (declare (type pool-with-timeout pool))
-  ;; Clean up timed-out resources first
-  (dequeue-timeout-resources pool)
-  (with-slots (disconnector storage lock idle-timeout wait-lock wait-condvar) pool
-    (bt2:acquire-lock lock)
-    (unwind-protect
-        (if (queue-full-p storage)
-            (progn
-              (decf (pool-active-count pool))
-              (bt2:release-lock lock)
-              (when disconnector
-                (funcall disconnector conn)))
-            (let ((item (make-item conn)))
-              #+sbcl
-              (setf (item-idle-timer item)
-                    (make-idle-timer item
-                                     (lambda (conn)
-                                       (let ((activep
-                                               (bt2:with-lock-held (lock)
-                                                 (let ((activep (item-active-p item)))
-                                                   (unless activep
-                                                     (setf (item-timeout-p item) t)
-                                                     (incf (pool-timeout-in-queue-count pool)))
-                                                   activep))))
-                                         (unless activep
-                                           (when disconnector
-                                             (funcall disconnector conn)))))))
-              #+sbcl
-              (sb-ext:schedule-timer (item-idle-timer item)
-                                     (/ idle-timeout 1000d0))
-              (enqueue item storage)
-              (decf (pool-active-count pool))
-              (bt2:release-lock lock)
-              (bt2:with-lock-held (wait-lock)
-                (bt2:condition-notify wait-condvar))))
-      (bt2:release-lock lock))
-    (values)))
+(define-putback-impl %putback-without-timeout pool-without-timeout
+  :enqueue-logic
+  (enqueue conn storage))
 
-;;
-;; Public putback API - dispatches based on pool type
+(define-putback-impl %putback-with-timeout pool-with-timeout
+  :before-putback
+  (dequeue-timeout-resources pool)
+  :enqueue-logic
+  (let ((item (make-item conn)))
+    #+sbcl
+    (with-slots (idle-timeout) pool
+      (setf (item-idle-timer item)
+            (make-idle-timer item
+                            (lambda (conn)
+                              (let ((activep
+                                      (bt2:with-lock-held (lock)
+                                        (let ((activep (item-active-p item)))
+                                          (unless activep
+                                            (setf (item-timeout-p item) t)
+                                            (incf (pool-timeout-in-queue-count pool)))
+                                          activep))))
+                                (unless activep
+                                  (when disconnector
+                                    (funcall disconnector conn)))))))
+      (sb-ext:schedule-timer (item-idle-timer item)
+                            (/ idle-timeout 1000d0)))
+    (enqueue item storage)))
 
 (defun putback (conn pool)
   "Return a connection to the pool."
   (etypecase pool
     (pool-without-timeout (%putback-without-timeout conn pool))
     (pool-with-timeout (%putback-with-timeout conn pool))))
-
-;;
-;; Convenience macro
 
 (defmacro with-connection ((conn pool) &body body)
   (let ((g-pool (gensym "POOL")))
