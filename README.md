@@ -46,6 +46,16 @@ This software is still ALPHA quality. The APIs will be likely to change.
 ;; Using `with-connection` macro.
 (with-connection (mito:*connection* *connection-pool*)
   (mito:find-dao 'user :name "fukamachi"))
+
+;; Unlimited connections mode (never blocks)
+(defvar *object-pool*
+  (make-pool :name "object-pool"
+             :connector #'make-object
+             :max-open-count nil      ; Unlimited!
+             :max-idle-count 100))    ; But only keep 100 idle
+
+;; This will never block, even under high load
+(fetch *object-pool*)  ;=> Always succeeds
 ```
 
 ## API
@@ -56,7 +66,7 @@ This software is still ALPHA quality. The APIs will be likely to change.
 - `:connector` (Required): A function to make and return a new connection object. It takes no arguments.
 - `:disconnector`: A function to disconnect a given object. It takes a single argument which is made by `:connector`.
 - `:ping`: A function to check if the given object is still available. It takes a single argument.
-- `:max-open-count`: The maximum number of concurrently open connections. The default is `4` and can be configured with `*default-max-open-count*`.
+- `:max-open-count`: The maximum number of concurrently open connections. The default is `4` and can be configured with `*default-max-open-count*`. If `nil`, allows unlimited connections (never blocks or errors).
 - `:max-idle-count`: The maximum number of idle/pooled connections. The default is `2` and can be configured with `*default-max-idle-count*`.
 - `:timeout`: The milliseconds to wait in `fetch` when the number of open connection reached to the maximum. If `nil`, it waits forever. The default is `nil`.
 - `:idle-timeout`: The milliseconds to disconnect idle resources after they're `putback`ed to the pool. If `nil`, it won't disconnect automatically. The default is `nil`.
@@ -96,6 +106,10 @@ Return the number of currently in use connections.
 ### [Accessor] pool-idle-count (pool)
 
 Return the number of currently idle connections.
+
+### [Accessor] pool-overflow-count (pool)
+
+Return the number of currently active connections beyond `pool-max-open-count`. Always returns `0` for pools created with `:max-open-count nil` (unlimited) or for limited pools (which never exceed their limit).
 
 ### [Function] fetch (pool)
 

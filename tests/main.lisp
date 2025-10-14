@@ -157,3 +157,61 @@
       (putback object pool)
       (ok (= (pool-open-count pool) 0))
       (ok (= (pool-idle-count pool) 0)))))
+
+(deftest unlimited-connections-basic
+  (let* ((create-count 0)
+         (pool (make-pool :name "test pool"
+                          :connector (lambda () (incf create-count))
+                          :max-open-count nil
+                          :max-idle-count 10)))
+    (testing "Fetch more than default limit should succeed"
+      (let ((conns (loop repeat 100 collect (fetch pool))))
+        (ok (= create-count 100) "Created 100 instances")
+        (ok (= (pool-open-count pool) 100) "Pool reports 100 open connections")
+        (ok (= (pool-active-count pool) 100) "All 100 connections are active")
+
+        ;; Return all connections
+        (mapc (lambda (c) (putback c pool)) conns)
+
+        (ok (<= (pool-idle-count pool) 10) "Pool shrunk back to max-idle-count")
+        (ok (= (pool-active-count pool) 0) "No active connections remain")))))
+
+(deftest unlimited-never-blocks
+  (let ((pool (make-pool :name "test pool"
+                         :connector (lambda () (get-internal-real-time))
+                         :max-open-count nil
+                         :timeout 0)))
+    (testing "Unlimited pool never blocks, even with timeout 0"
+      (ok (loop repeat 100 always (fetch pool))
+          "Fetch 100 times without blocking or erroring"))))
+
+(deftest overflow-count-tracking
+  (let* ((create-count 0)
+         (pool (make-pool :name "test pool"
+                          :connector (lambda () (incf create-count))
+                          :max-open-count 5
+                          :max-idle-count 3)))
+    (testing "Overflow count is always 0 for limited pools"
+      (ok (= (pool-overflow-count pool) 0) "Initially no overflow")
+
+      (let ((conns (loop repeat 5 collect (fetch pool))))
+        (ok (= (pool-overflow-count pool) 0) "No overflow at limit (5 active = 5 max)")
+        (ok (= create-count 5) "Created 5 instances")
+
+        ;; Return all connections
+        (mapc (lambda (c) (putback c pool)) conns)
+
+        (ok (= (pool-overflow-count pool) 0) "No overflow after putback")
+        (ok (= (pool-active-count pool) 0) "No active connections")))))
+
+(deftest overflow-count-unlimited
+  (let ((pool (make-pool :name "test pool"
+                         :connector (lambda () (get-internal-real-time))
+                         :max-open-count nil)))
+    (testing "Overflow count is always 0 for unlimited pools"
+      (ok (= (pool-overflow-count pool) 0) "Initially 0")
+
+      (loop repeat 100 do (fetch pool))
+
+      (ok (= (pool-overflow-count pool) 0) "Still 0 after 100 fetches")
+      (ok (= (pool-active-count pool) 100) "But 100 active connections"))))

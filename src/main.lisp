@@ -20,6 +20,7 @@
            #:pool-active-count
            #:pool-idle-count
            #:pool-open-count
+           #:pool-overflow-count
            #:fetch
            #:putback
            #:too-many-open-connection
@@ -57,7 +58,9 @@
                         timeout
                         idle-timeout
 
-                   &aux (storage (make-queue* (min max-open-count max-idle-count))))))
+                   &aux (unlimited-p (null max-open-count))
+                        (max-open-count (or max-open-count most-positive-fixnum))
+                        (storage (make-queue* (min max-open-count max-idle-count))))))
   name
   connector
   disconnector
@@ -65,6 +68,7 @@
 
   max-open-count
   max-idle-count
+  unlimited-p
   idle-timeout  ;; Works only on SBCL
   timeout
 
@@ -92,6 +96,13 @@
   (+ (pool-active-count pool)
      (pool-idle-count pool)))
 
+(defun pool-overflow-count (pool)
+  "Number of connections beyond max-open-count (0 if unlimited)."
+  (if (pool-unlimited-p pool)
+      0
+      (max 0 (- (pool-active-count pool)
+                (pool-max-open-count pool)))))
+
 (defstruct (item (:constructor make-item (object)))
   object
   idle-timer
@@ -107,11 +118,12 @@
                      (slot-value condition 'limit)))))
 
 (defun fetch (pool)
-  (with-slots (connector ping storage lock timeout wait-lock wait-condvar) pool
+  (with-slots (connector ping storage lock timeout unlimited-p wait-lock wait-condvar) pool
     (flet ((allocate-new ()
              (funcall connector))
            (can-open-p ()
-             (< (pool-open-count pool) (pool-max-open-count pool))))
+             (or unlimited-p
+                 (< (pool-open-count pool) (pool-max-open-count pool)))))
       (declare (inline allocate-new))
       (loop
         (bt2:with-lock-held (lock)
