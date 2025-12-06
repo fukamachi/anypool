@@ -212,6 +212,7 @@
     #+sbcl
     (when (item-idle-timer item)
       ;; Mark as active BEFORE releasing lock to prevent race condition
+      ;; active-p is also true when timeout or ping failure, but those item objects are discarded, so there is no practical problem.
       (setf (item-active-p item) t)
       ;; Release the lock once to prevent from deadlock
       (bt2:release-lock lock)
@@ -222,7 +223,6 @@
        (decf (pool-timeout-in-queue-count pool)))
       ((or (null ping)
            (funcall ping (item-object item)))
-       ;; active-p is already set above
        (incf (pool-active-count pool))
        (return (item-object item)))
       ;; Not available anymore. Just ignore

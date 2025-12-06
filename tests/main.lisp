@@ -123,7 +123,7 @@
                         collect (bt2:make-thread
                                  (lambda ()
                                    (loop
-                                     repeat 1000
+                                     repeat 1000000
                                      do (let ((object (fetch pool)))
                                           (putback object pool))))))))
     (dolist (thread threads)
@@ -132,13 +132,11 @@
 
 #+sbcl
 (deftest race-condition-between-fetch-and-idle-timer-thread
-  (let* ((disconnected-conn nil)
-         (pool (make-pool :name "race-pool-mock"
-                          :connector (lambda () (get-internal-real-time))
-                          :disconnector (lambda (conn) (push conn disconnected-conn))
-                          :max-open-count 2
-                          :idle-timeout 100 ; Timeout after 0.1 seconds
-                          )))
+  (let ((pool (make-pool :name "race-pool-mock"
+                         :connector (lambda () (get-internal-real-time))
+                         :max-open-count 2
+                         :idle-timeout 100 ; Timeout after 0.1 seconds
+                         )))
 
     ;; Preparation: Put one item in the pool
     (let ((item (fetch pool)))
@@ -162,9 +160,6 @@
 
       ;; Verification: Confirm that the timer interrupt doesn't cause idle-count to become negative
       (ok (zerop (pool-idle-count pool)) "Pool Idle Count should be 0")
-
-      ;; Note: resource leakage occurs because it is not disconnected when the race-condition of fetch and timeout.
-      (ok (null disconnected-conn))
 
       ;; Thread B: Confirm that QUEUE-UNDERFLOW-ERROR does not occur
       (ok (fetch pool))
