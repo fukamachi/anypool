@@ -6,7 +6,10 @@
                 #:pool-storage
                 #:dequeue-timeout-resources)
   (:import-from #:cl-speedy-queue
-                #:queue-count))
+                #:queue-count)
+  (:import-from #:anypool/tests/utils
+                #:*mock-function*
+                #:with-mock-functions))
 (in-package #:anypool/tests)
 
 (deftest make-pool
@@ -126,6 +129,47 @@
     (dolist (thread threads)
       (bt2:join-thread thread))
     (pass "passed")))
+
+#+sbcl
+(deftest race-condition-between-fetch-and-idle-timer-thread
+  (let* ((disconnected-conn nil)
+         (pool (make-pool :name "race-pool-mock"
+                          :connector (lambda () (get-internal-real-time))
+                          :disconnector (lambda (conn) (push conn disconnected-conn))
+                          :max-open-count 2
+                          :idle-timeout 100 ; Timeout after 0.1 seconds
+                          )))
+
+    ;; Preparation: Put one item in the pool
+    (let ((item (fetch pool)))
+      (putback item pool))
+
+    (ok (= (pool-idle-count pool) 1) "Initial: 1 idle item")
+
+    ;; Thread A: Execute fetch (mocked unschedule-timer will be called)
+    (let ((thread-a (bt2:make-thread
+                     (lambda ()
+                       ;; Mock the SBCL system function unschedule-timer
+                       (with-mock-functions ((sb-ext:unschedule-timer (timer)
+                                               ;; 1. Sleep here to extend the lock release time
+                                               (sleep 0.5)
+                                               ;; 2. Call the original function (to preserve functionality)
+                                               (funcall (gethash 'sb-ext:unschedule-timer *mock-function*) timer)))
+                         (fetch pool))))))
+
+      ;; Wait for the idle-timeout timer to fire (0.2 seconds wait > idle-timeout 0.1 seconds)
+      (sleep 0.2)
+
+      ;; Verification: Confirm that the timer interrupt doesn't cause idle-count to become negative
+      (ok (zerop (pool-idle-count pool)) "Pool Idle Count should be 0")
+
+      ;; Note: resource leakage occurs because it is not disconnected when the race-condition of fetch and timeout.
+      (ok (null disconnected-conn))
+
+      ;; Thread B: Confirm that QUEUE-UNDERFLOW-ERROR does not occur
+      (ok (fetch pool))
+
+      (bt2:join-thread thread-a))))
 
 (deftest timeout
   (let ((pool (make-pool :name "test pool"
