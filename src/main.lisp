@@ -212,7 +212,7 @@
     #+sbcl
     (when (item-idle-timer item)
       ;; Mark as active BEFORE releasing lock to prevent race condition
-      ;; active-p is also true when timeout or ping failure, but those item objects are discarded, so there is no practical problem.
+      ;; active-p is set to true even for timed-out items or ping failures, but these items are discarded so this is harmless
       (setf (item-active-p item) t)
       ;; Release the lock once to prevent from deadlock
       (bt2:release-lock lock)
