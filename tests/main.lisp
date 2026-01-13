@@ -93,6 +93,40 @@
       (sleep 0.5)
       (ng (eq (fetch pool) object)))))
 
+(deftest ping-failure-calls-disconnector
+  (testing "pool without idle-timeout"
+    (let ((pool (make-pool :name "test pool"
+                           :connector (lambda () (get-internal-real-time))
+                           :disconnector (lambda (conn)
+                                           (declare (ignore conn))
+                                           (format t "disconnected"))
+                           :ping (lambda (item)
+                                   (< (get-internal-real-time)
+                                      (+ item (/ internal-time-units-per-second 2)))))))
+      (let ((object (fetch pool)))
+        (putback object pool)
+        (sleep 0.5)
+        ;; Ping will fail, disconnector should be called
+        (ok (outputs (fetch pool) "disconnected")
+            "Disconnector is called when ping fails"))))
+  (testing "pool with idle-timeout"
+    #+sbcl
+    (let ((pool (make-pool :name "test pool"
+                           :connector (lambda () (get-internal-real-time))
+                           :disconnector (lambda (conn)
+                                           (declare (ignore conn))
+                                           (format t "disconnected"))
+                           :ping (lambda (item)
+                                   (< (get-internal-real-time)
+                                      (+ item (/ internal-time-units-per-second 2))))
+                           :idle-timeout 10000))) ; Long timeout so timer doesn't fire
+      (let ((object (fetch pool)))
+        (putback object pool)
+        (sleep 0.5)
+        ;; Ping will fail, disconnector should be called
+        (ok (outputs (fetch pool) "disconnected")
+            "Disconnector is called when ping fails (with idle-timeout)")))))
+
 (deftest idle-timeout
   #-sbcl (skip ":idle-timeout works only on SBCL")
   #+sbcl

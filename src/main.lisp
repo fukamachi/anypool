@@ -149,7 +149,7 @@
   "Generate a fetch implementation with type-specific logic."
   `(defun ,name (pool)
      (declare (type ,pool-type pool))
-     (with-slots (connector ping storage lock timeout unlimited-p wait-lock wait-condvar) pool
+     (with-slots (connector disconnector ping storage lock timeout unlimited-p wait-lock wait-condvar) pool
        (flet ((allocate-new ()
                 (funcall connector))
               (can-open-p ()
@@ -194,8 +194,10 @@
            (funcall ping conn))
        (incf (pool-active-count pool))
        (return conn))
-      ;; Ping failed, discard and continue
-      (t))))
+      ;; Ping failed, disconnect and continue
+      (t
+       (when disconnector
+         (ignore-errors (funcall disconnector conn)))))))
 
 #+sbcl
 (defun make-idle-timer (item timeout-fn)
@@ -225,8 +227,10 @@
            (funcall ping (item-object item)))
        (incf (pool-active-count pool))
        (return (item-object item)))
-      ;; Not available anymore. Just ignore
-      (t))))
+      ;; Ping failed, disconnect and continue
+      (t
+       (when disconnector
+         (ignore-errors (funcall disconnector (item-object item))))))))
 
 (defun fetch (pool)
   "Fetch a connection from the pool."
