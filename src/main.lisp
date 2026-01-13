@@ -52,7 +52,7 @@
   idle-timeout
   timeout
   ;; Internal
-  storage
+  storage ; queue object
   (active-count 0 :type fixnum)
   (lock (bt2:make-lock :name "ANYPOOL-LOCK"))
   (wait-lock (bt2:make-lock :name "ANYPOOL-OPENWAIT-LOCK"))
@@ -206,11 +206,14 @@
     :thread t))
 
 (define-fetch-impl %fetch-with-timeout pool-with-timeout
-  :idle-check (zerop (pool-idle-count pool))
+  :idle-check (<= (pool-idle-count pool) 0) ; Fail-safe for cases where pool-idle-count is negative
   :dequeue-and-validate
   (let ((item (dequeue storage)))
     #+sbcl
     (when (item-idle-timer item)
+      ;; Mark as active BEFORE releasing lock to prevent race condition
+      ;; active-p is set to true even for timed-out items or ping failures, but these items are discarded so this is harmless
+      (setf (item-active-p item) t)
       ;; Release the lock once to prevent from deadlock
       (bt2:release-lock lock)
       (sb-ext:unschedule-timer (item-idle-timer item))
@@ -220,7 +223,6 @@
        (decf (pool-timeout-in-queue-count pool)))
       ((or (null ping)
            (funcall ping (item-object item)))
-       (setf (item-active-p item) t)
        (incf (pool-active-count pool))
        (return (item-object item)))
       ;; Not available anymore. Just ignore
@@ -280,19 +282,19 @@
     (with-slots (idle-timeout) pool
       (setf (item-idle-timer item)
             (make-idle-timer item
-                            (lambda (conn)
-                              (let ((activep
-                                      (bt2:with-lock-held (lock)
-                                        (let ((activep (item-active-p item)))
-                                          (unless activep
-                                            (setf (item-timeout-p item) t)
-                                            (incf (pool-timeout-in-queue-count pool)))
-                                          activep))))
-                                (unless activep
-                                  (when disconnector
-                                    (funcall disconnector conn)))))))
+                             (lambda (conn)
+                               (let ((activep
+                                       (bt2:with-lock-held (lock)
+                                         (let ((activep (item-active-p item)))
+                                           (unless activep
+                                             (setf (item-timeout-p item) t)
+                                             (incf (pool-timeout-in-queue-count pool)))
+                                           activep))))
+                                 (unless activep
+                                   (when disconnector
+                                     (funcall disconnector conn)))))))
       (sb-ext:schedule-timer (item-idle-timer item)
-                            (/ idle-timeout 1000d0)))
+                             (/ idle-timeout 1000d0)))
     (enqueue item storage)))
 
 (defun putback (conn pool)
