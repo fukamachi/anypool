@@ -1,18 +1,21 @@
 name: CI
 
-on: push
+on: [push, pull_request]
 
 jobs:
   test:
-    name: ${{ matrix.lisp }} on ubuntu-latest
+    name: ${{ matrix.lisp }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         lisp: [sbcl, ccl]
 
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t anypool-test-image --build-arg LISP=${{ matrix.lisp }} -f tests/Dockerfile .
+
       - name: Run tests
-        env:
-          LISP: ${{ matrix.lisp }}
-        run: make
+        run: docker run --rm -v ${{ github.workspace }}:/app anypool-test-image
