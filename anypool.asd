@@ -18,7 +18,8 @@
     :components ((:file "utils")
                  (:file "main" :depends-on ("utils"))
                  (:file "max-lifetime" :depends-on ("utils"))
-                 (:file "io-outside-lock" :depends-on ("utils")))))
+                 (:file "io-outside-lock" :depends-on ("utils"))
+                 (:file "deadline"))))
   :perform (test-op (o c) (symbol-call :rove '#:run c)))
 
 (defsystem "anypool/middleware"

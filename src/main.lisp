@@ -52,6 +52,12 @@ Must appear lexically inside WITHOUT-INTERRUPTS*."
   #+sbcl `(sb-sys:allow-with-interrupts ,@body)
   #-sbcl `(progn ,@body))
 
+(defmacro without-deadline (&body body)
+  "Run BODY with no SB-SYS:WITH-DEADLINE in effect. A deadline is signalled from inside a blocking
+lock grab even with interrupts deferred, so a cleanup it cut short would lose a slot."
+  #+sbcl `(sb-sys:with-deadline (:seconds nil :override t) ,@body)
+  #-sbcl `(progn ,@body))
+
 (defun make-queue* (size)
   (if (zerop size)
       (make-array 2 :initial-contents '(2 2))
@@ -387,15 +393,16 @@ they work in is counted as active meanwhile, so the pool never opens more than m
         (unless lent
           ;; The disconnector may exit non-locally; the slot is freed regardless. Interrupts are
           ;; allowed only in the disconnect, which can block and must stay cancellable.
-          (unwind-protect
-               (when owned
-                 (let ((conn owned))
-                   (bt2:with-lock-held (lock)
-                     (setf owned nil)
-                     (forget-created-at pool conn))
-                   (with-local-interrupts* (disconnect-quietly pool conn))))
-            (when held
-              (release-slot pool))))))
+          (without-deadline
+            (unwind-protect
+                 (when owned
+                   (let ((conn owned))
+                     (bt2:with-lock-held (lock)
+                       (setf owned nil)
+                       (forget-created-at pool conn))
+                     (with-local-interrupts* (disconnect-quietly pool conn))))
+              (when held
+                (release-slot pool)))))))
     lent))
 
 (defun notify-waiter (pool)
@@ -404,10 +411,11 @@ they work in is counted as active meanwhile, so the pool never opens more than m
 
 (defun release-slot (pool)
   "Free one slot counted in ACTIVE-COUNT and wake a waiter to claim it."
-  (without-interrupts*
-    (bt2:with-lock-held ((pool-lock pool))
-      (decf (pool-active-count pool)))
-    (notify-waiter pool)))
+  (without-deadline
+    (without-interrupts*
+      (bt2:with-lock-held ((pool-lock pool))
+        (decf (pool-active-count pool)))
+      (notify-waiter pool))))
 
 (defun call-then-release-slot (pool fn)
   "Call FN, then free the slot of a lent-out connection and wake a waiter even if FN fails.
@@ -421,7 +429,7 @@ The slot is held until FN returns so a waiter cannot open a replacement while th
      (declare (type ,pool-type pool))
      ;; Interrupted between the decision and its outcome, CONN would be neither queued nor its
      ;; slot freed. Only the disconnect, which does I/O, can be interrupted.
-     (without-interrupts*
+     (without-deadline (without-interrupts*
        ,@(when before-putback (list before-putback))
        (with-slots (disconnector storage lock) pool
          (ecase (bt2:with-lock-held (lock)
@@ -449,7 +457,7 @@ The slot is held until FN returns so a waiter cannot open a replacement while th
                                     (lambda ()
                                       (with-local-interrupts*
                                         (when disconnector
-                                          (funcall disconnector conn)))))))))
+                                          (funcall disconnector conn))))))))))
      (values)))
 
 (defun dequeue-timeout-resources (pool)
