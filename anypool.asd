@@ -1,5 +1,5 @@
 (defsystem "anypool"
-  :version "0.1.0"
+  :version "0.2.0"
   :author "Eitaro Fukamachi"
   :license "BSD 2-Clause"
   :description "General-purpose pooling library"

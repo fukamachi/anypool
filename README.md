@@ -71,6 +71,22 @@ This software is still ALPHA quality. The APIs will be likely to change.
              :max-lifetime (* 5 60 1000)))
 ```
 
+## Changes in 0.2.0
+
+These changes can break code that worked with 0.1:
+
+- `:connector` and `:ping` run without the pool lock. The pool can call them from several threads at the same time, so they must be thread-safe. In 0.1, the pool called them one at a time.
+- `:connector` must return a non-`nil` object. If it returns `nil`, `fetch` returns `nil` and frees the slot.
+- If `:ping` signals an error, the pool disconnects that connection, and the error propagates from `fetch`. In 0.1, the pool dropped the connection without a disconnect.
+
+New in 0.2.0:
+
+- `:max-lifetime` and `pool-max-lifetime`. See [max-lifetime](#max-lifetime).
+- On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting correct under interrupts. See [Interrupts](#interrupts).
+- The package exports `resource-already-in-pool`.
+- The Lack middleware accepts `:max-lifetime`.
+- On SBCL, a deadline from `sb-sys:with-deadline` cannot stop the cleanups of the pool.
+
 ## API
 
 ### [Constructor] make-pool (&key name connector disconnector ping max-open-count max-idle-count timeout idle-timeout max-lifetime)
