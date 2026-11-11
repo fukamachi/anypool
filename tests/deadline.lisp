@@ -78,3 +78,22 @@
     (ok (= (pool-active-count pool) 1) "Only the held connection counts")
     (putback conn pool)
     (ok (eql (fetch pool) conn) "The pool lock is not left taken")))
+
+#+sbcl
+(deftest connect-after-deadline-keeps-connection
+  (let* ((connecting (bt2:make-semaphore))
+         (disconnected '())
+         (pool (make-pool :connector (lambda ()
+                                       (bt2:signal-semaphore connecting)
+                                       (busy-wait 0.4d0)
+                                       :conn)
+                          :disconnector (lambda (c) (push c disconnected))
+                          :max-open-count 1))
+         (user (run-with-deadline 0.2d0 (lambda () (fetch pool)))))
+    (ok (bt2:wait-on-semaphore connecting :timeout 5))
+    ;; The connector returns after the deadline, while the pool lock is taken.
+    (hold-lock pool 1)
+    (let ((result (bt2:join-thread user)))
+      (ok (or (equal result '(:ok :conn))
+              (equal disconnected '(:conn)))
+          (format nil "The connection is lent or disconnected, not lost: ~S" result)))))
