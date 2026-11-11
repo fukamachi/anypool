@@ -404,7 +404,7 @@
                             :disconnector #'disconnect
                             :max-lifetime 1000)))
       (ok (eq (fetch pool) shared))
-      (ok (signals (fetch pool) 'error))
+      (ok (signals (fetch pool) 'resource-already-in-pool))
       (ok (= (conn-disconnect-count shared) 0) "The borrowed one is left alone")
       (ok (= (pool-active-count pool) 1))
       (ok (= (tracked-count pool) 1))))
