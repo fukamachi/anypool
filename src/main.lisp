@@ -378,13 +378,14 @@ they work in is counted as active meanwhile, so the pool never opens more than m
                             (setf owned nil)))
                         (disconnect-quietly pool conn)))
                      (:open
-                      (let ((conn (funcall (pool-connector pool))))
-                        ;; A deadline at this lock grab would drop CONN before it is OWNED.
-                        (without-deadline
-                          (bt2:with-lock-held (lock)
-                            ;; Not OWNED if the connector returned one the pool already manages,
-                            ;; so the cleanup leaves that connection alone.
-                            (without-interrupts*
+                      ;; Interrupts are deferred from the connector's return until CONN is OWNED,
+                      ;; so the cleanup disconnects it; a deadline at the lock grab would drop it
+                      ;; too. Not OWNED if the connector returned one the pool already manages, so
+                      ;; the cleanup leaves that connection alone.
+                      (without-interrupts*
+                        (let ((conn (with-local-interrupts* (funcall (pool-connector pool)))))
+                          (without-deadline
+                            (bt2:with-lock-held (lock)
                               (when (pool-max-lifetime pool)
                                 (register-created-at pool conn))
                               (setf owned conn)))))
