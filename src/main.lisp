@@ -26,6 +26,7 @@
            #:putback
            #:too-many-open-connection
            #:error-max-open-limit
+           #:resource-already-in-pool
            #:with-connection))
 
 (in-package #:anypool)

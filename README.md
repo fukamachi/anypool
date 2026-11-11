@@ -172,7 +172,7 @@ What it does not do:
 - It never disconnects a borrowed connection. A connection kept borrowed for a long time is used past its lifetime until it is `putback`.
 - There is no timer for it. Expired connections are found in `fetch` and `putback`, so a pool that is not being used keeps them until it is used again (`:idle-timeout` still disconnects idle ones on its own schedule).
 - It does not touch DNS or any cache. `:connector` has to open a new physical connection each time; if it hands out connections from another cache of its own, the old ones may come back.
-- `:connector` must return a new object on each call while `:max-lifetime` is set. `fetch` signals an error if it returns an object the pool already manages, and leaves that object alone.
+- `:connector` must return a new object on each call while `:max-lifetime` is set. `fetch` signals `resource-already-in-pool` if it returns an object the pool already manages, and leaves that object alone.
 - Without `:disconnector`, an expired connection is only dropped from the pool; nothing releases its external resources explicitly.
 - It gives new servers a chance to receive connections, but it does not balance load evenly among them.
 - It does not make database changes safe by itself. If a server is stopped first, work on connections to it can fail.
