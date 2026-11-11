@@ -154,6 +154,8 @@ On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting cor
 - An interrupt right after `:connector` returns, before the pool records the connection, frees the slot but leaves that physical connection open. An interrupt while a retired connection is being disconnected can leave the connection open as well. The pool's counts stay correct in both cases.
 - Where the pool ignores errors from `:disconnector` (after a failed ping, for an expired connection), it ignores every `error` signalled during the disconnect, including one that an interrupt function signals there. Conditions that are not errors, such as `sb-ext:timeout` from `sb-ext:with-timeout`, and non-local exits such as `throw` still take effect.
 - On other implementations there is no protection against interrupts.
+- To limit how long a call can take, use `sb-sys:with-deadline` where you can, not `sb-ext:with-timeout`. SBCL signals a deadline only in a blocking operation, such as a lock grab, a wait, `sleep` or blocking I/O. Thus a deadline cannot stop a thread between two steps of the pool or of your database driver. The pool runs its cleanups with no deadline, so a deadline cannot stop them either.
+- An interrupt or a timeout can stop the body of `with-connection` in the middle of an exchange with the server. `with-connection` then puts that connection back, and a later `fetch` can lend it. The pool does not know the state of the protocol. If your driver cannot continue after a stopped exchange, give a `:ping` that finds such a connection, so that `fetch` disconnects it.
 
 ## max-lifetime
 
