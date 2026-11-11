@@ -779,37 +779,40 @@ in the pool can swallow it."
       (ok (= (pool-open-count pool) 1)))))
 
 #+sbcl
-(deftest interrupt-right-after-connect-leaks-only-the-connection
-  (let* ((connected (bt2:make-semaphore))
-         (locked (bt2:make-semaphore))
-         (disconnected '())
-         (conn (list :conn))
-         ;; Returns only once the test holds the pool lock, so the fetch blocks taking it to
-         ;; record the creation time.
-         (pool (make-pool :connector (lambda ()
-                                       (bt2:signal-semaphore connected)
-                                       (bt2:wait-on-semaphore locked :timeout 5)
-                                       conn)
-                          :disconnector (lambda (c) (push c disconnected))
-                          :max-open-count 1
-                          :timeout 0
-                          :max-lifetime 600000))
-         (lock (pool-lock pool))
-         (fetching (spawn (lambda () (fetch pool)))))
-    (ok (bt2:wait-on-semaphore connected :timeout 5) "The connector runs")
-    (bt2:acquire-lock lock)
-    (unwind-protect
-         (progn
-           (bt2:signal-semaphore locked)
-           (await-blocked-on fetching lock)
-           (interrupt fetching))
-      (bt2:release-lock lock))
-    (multiple-value-bind (finished result) (join-within fetching 2)
-      (ok (and finished (interrupted-p result)) "The fetch is interrupted before taking the connection"))
-    (ok (= (pool-active-count pool) 0) "The slot is released")
-    (ok (= (hash-table-count (pool-created-at-table pool)) (pool-open-count pool) 0)
-        "No creation time is left for the connection")
-    (ok (null disconnected) "The physical connection leaks, as documented")))
+(deftest interrupt-right-after-connect-disconnects-the-connection
+  (dolist (max-lifetime '(600000 nil))
+    (let* ((connected (bt2:make-semaphore))
+           (locked (bt2:make-semaphore))
+           (disconnected '())
+           (conn (list :conn))
+           ;; Returns only once the test holds the pool lock, so the fetch blocks taking it to
+           ;; record the connection.
+           (pool (make-pool :connector (lambda ()
+                                         (bt2:signal-semaphore connected)
+                                         (bt2:wait-on-semaphore locked :timeout 5)
+                                         conn)
+                            :disconnector (lambda (c) (push c disconnected))
+                            :max-open-count 1
+                            :timeout 0
+                            :max-lifetime max-lifetime))
+           (lock (pool-lock pool))
+           (fetching (spawn (lambda () (fetch pool)))))
+      (ok (bt2:wait-on-semaphore connected :timeout 5) "The connector runs")
+      (bt2:acquire-lock lock)
+      (unwind-protect
+           (progn
+             (bt2:signal-semaphore locked)
+             (await-blocked-on fetching lock)
+             (interrupt fetching))
+        (bt2:release-lock lock))
+      (multiple-value-bind (finished result) (join-within fetching 2)
+        (ok (and finished (interrupted-p result)) "The interrupt still ends the fetch"))
+      (ok (= (pool-active-count pool) 0) "The slot is released")
+      (when max-lifetime
+        (ok (= (hash-table-count (pool-created-at-table pool)) 0)
+            "No creation time is left for the connection"))
+      (ok (equal disconnected (list conn))
+          (format nil "The connection is disconnected (max-lifetime ~A)" max-lifetime)))))
 
 (deftest with-connection-puts-back-on-non-local-exit
   (let ((pool (make-pool :connector (make-counter))))
@@ -981,7 +984,7 @@ in the pool can swallow it."
           (ok (= (pool-active-count pool) 0) "Every slot came back")
           (ok (= (pool-open-count pool) (pool-idle-count pool)))
           (ok (= (hash-table-count (pool-created-at-table pool)) (pool-open-count pool)))
-          ;; Interrupted right after the connector returns or inside the disconnector, a physical
-          ;; connection can be left open; each such leak takes one interrupt.
+          ;; Interrupted inside the disconnector, a physical connection can be left open; each
+          ;; such leak takes one interrupt.
           (ok (<= (pool-open-count pool) live (+ (pool-open-count pool) interrupts))
               (format nil "live=~A open=~A interrupts=~A" live (pool-open-count pool) interrupts)))))))

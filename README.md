@@ -151,7 +151,7 @@ On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting cor
 
 - Use `with-connection` where you can. It defers interrupts from the moment `fetch` returns until the connection is bound, and while it is put back. If you call `fetch` and `putback` directly, an interrupt between `fetch` returning and your code taking the connection loses the connection and its slot.
 - If `conn` in `with-connection` names a special variable, it is bound to `nil` while `fetch` runs.
-- An interrupt right after `:connector` returns, before the pool records the connection, frees the slot but leaves that physical connection open. An interrupt while a retired connection is being disconnected can leave the connection open as well. The pool's counts stay correct in both cases.
+- An interrupt while a retired connection is being disconnected can leave that physical connection open. The pool's counts stay correct.
 - Where the pool ignores errors from `:disconnector` (after a failed ping, for an expired connection), it ignores every `error` signalled during the disconnect, including one that an interrupt function signals there. Conditions that are not errors, such as `sb-ext:timeout` from `sb-ext:with-timeout`, and non-local exits such as `throw` still take effect.
 - On other implementations there is no protection against interrupts.
 
