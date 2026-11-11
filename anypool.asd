@@ -12,7 +12,8 @@
 
 (defsystem "anypool/tests"
   :depends-on ("rove"
-               "anypool")
+               "anypool"
+               "anypool/middleware")
   :components
   ((:module "tests"
     :components ((:file "utils")

@@ -425,3 +425,15 @@ monotonic clock can read 499998us after (sleep 0.5).")
       (ok (eql (bt2:join-thread thread) 1))
       (ok (= created 1))
       (ok (= (pool-open-count pool) 1)))))
+
+(deftest middleware-passes-max-lifetime
+  (let* ((n 0)
+         (app (funcall anypool/middleware:*lack-middleware-anypool*
+                       (lambda (env)
+                         (declare (ignore env))
+                         anypool/middleware:*connection*)
+                       :connector (lambda () (incf n))
+                       :max-lifetime 1)))
+    (ok (eql (funcall app '()) 1))
+    (sleep 0.02d0)
+    (ok (eql (funcall app '()) 2) "The expired connection is replaced")))

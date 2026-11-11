@@ -8,8 +8,8 @@
 (defparameter *connection* nil)
 
 (defparameter *lack-middleware-anypool*
-  (lambda (app &rest args &key (var '*connection*) connector disconnector ping max-open-count max-idle-count timeout idle-timeout)
-    (declare (ignore connector disconnector ping max-open-count max-idle-count timeout idle-timeout))
+  (lambda (app &rest args &key (var '*connection*) connector disconnector ping max-open-count max-idle-count timeout idle-timeout max-lifetime)
+    (declare (ignore connector disconnector ping max-open-count max-idle-count timeout idle-timeout max-lifetime))
     (remf args :var)
     (let ((pool (apply #'anypool:make-pool args)))
       (lambda (env)
