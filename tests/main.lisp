@@ -437,3 +437,24 @@ monotonic clock can read 499998us after (sleep 0.5).")
     (ok (eql (funcall app '()) 1))
     (sleep 0.02d0)
     (ok (eql (funcall app '()) 2) "The expired connection is replaced")))
+
+#+sbcl
+(deftest middleware-returns-connection-under-with-timeout
+  (let* ((n 0)
+         (app (funcall anypool/middleware:*lack-middleware-anypool*
+                       (lambda (env)
+                         (declare (ignore env))
+                         anypool/middleware:*connection*)
+                       :connector (lambda () (incf n))
+                       :max-open-count 1
+                       :timeout 0))
+         (orig-fetch (symbol-function 'anypool:fetch)))
+    ;; The timeout passes right after fetch returns, before the middleware can put the
+    ;; connection back.
+    (with-mock-functions ((anypool:fetch (pool)
+                            (prog1 (funcall orig-fetch pool)
+                              (let ((end (+ (get-internal-real-time)
+                                            (* 3/10 internal-time-units-per-second))))
+                                (loop while (< (get-internal-real-time) end))))))
+      (ok (signals (sb-ext:with-timeout 0.1d0 (funcall app '())) 'sb-ext:timeout)))
+    (ok (eql (funcall app '()) 1) "The slot came back, so the next request gets the connection")))
