@@ -92,12 +92,13 @@ in the pool can swallow it."
         (error "The thread never blocked on the lock"))))
 
 #+sbcl
-(deftest putback-interrupted-while-disconnecting-releases-slot
+(deftest putback-interrupted-while-disconnecting-finishes-the-disconnect
   (let* ((gate (make-gate))
+         (disconnected '())
          (pool (make-pool :connector (make-counter)
                           :disconnector (lambda (conn)
-                                          (declare (ignore conn))
-                                          (pass-gate gate))
+                                          (pass-gate gate)
+                                          (push conn disconnected))
                           :max-open-count 1
                           :max-idle-count 0
                           :timeout 2000))
@@ -106,11 +107,11 @@ in the pool can swallow it."
     (await-gate gate)
     (let ((waiter (start-waiting-fetch (lambda () (fetch pool)) (pool-lock pool))))
       (interrupt returning)
+      (ok (not (join-within returning 0.5)) "The interrupt waits for the disconnect")
+      (open-gate gate)
       (multiple-value-bind (finished result) (join-within returning 2)
-        (unless finished
-          (open-gate gate))
-        (ok finished "The disconnect can still be interrupted")
-        (ok (and finished (interrupted-p result))))
+        (ok (and finished (interrupted-p result)) "The interrupt takes effect after the disconnect"))
+      (ok (equal disconnected (list conn)) "The connection is disconnected")
       (let ((result (bt2:join-thread waiter)))
         (ok (eq (first result) :ok) "The slot is released and the waiter woken")
         (ok (eql (second result) 2))))))
@@ -371,7 +372,7 @@ in the pool can swallow it."
             (ok (eql (second result) 2))))))))
 
 #+sbcl
-(deftest interrupt-during-cleanup-disconnect-releases-slot
+(deftest interrupt-during-cleanup-disconnect-finishes-the-disconnect
   (dolist (args (list '() #+sbcl '(:idle-timeout 600000)))
     (let* ((gate (make-gate))
            (failing nil)
@@ -398,12 +399,10 @@ in the pool can swallow it."
                              (error () :ping-error)))))))
         (await-gate gate)
         (interrupt-with-throw fetching)
+        (ok (not (join-within fetching 0.5)) "The interrupt waits for the disconnect")
+        (open-gate gate)
         (multiple-value-bind (finished result) (join-within fetching 2)
-          (unless finished
-            (open-gate gate 2)
-            (ok (join-within fetching 5) "The thread finishes once the gate opens"))
-          (ok finished "The disconnect in the cleanup can be interrupted")
-          (ok (and finished (eq result :thrown)) "The interrupt exits through the disconnect"))
+          (ok (and finished (eq result :thrown)) "The interrupt takes effect after the disconnect"))
         (ok (= (pool-active-count pool) 0) "The slot is released")
         (setf failing nil)
         (ok (eql (handler-case (fetch pool)
@@ -412,7 +411,7 @@ in the pool can swallow it."
             "The slot can be used again")))))
 
 #+sbcl
-(deftest timeout-while-disconnecting-a-rejected-connection-stops-fetch
+(deftest timeout-while-disconnecting-a-rejected-connection-stops-fetch-after-the-disconnect
   (let* ((gate (make-gate))
          (rejecting nil)
          (pool (make-pool :connector (make-counter)
@@ -431,12 +430,11 @@ in the pool can swallow it."
                              (handler-case (sb-ext:with-timeout 0.5 (fetch pool))
                                (sb-ext:timeout () :timed-out))))))
       (await-gate gate)
+      (ok (not (join-within fetching 1)) "The timeout waits for the disconnect")
+      (open-gate gate)
       (multiple-value-bind (finished result) (join-within fetching 3)
-        (unless finished
-          (open-gate gate 2)
-          (ok (join-within fetching 5) "The thread finishes once the gate opens"))
         (ok (and finished (equal result '(:ok :timed-out)))
-            "fetch stops instead of opening a replacement"))
+            "fetch stops after the disconnect instead of opening a replacement"))
       (ok (= (pool-active-count pool) 0) "The slot is released")
       (setf rejecting nil)
       (ok (eql (handler-case (fetch pool)

@@ -244,7 +244,8 @@ to the caller. Lifetime is checked again after PING, which may take long enough 
 
 (defun disconnect-quietly (pool conn)
   "Disconnect CONN, which the pool will not lend again, ignoring any ERROR from the disconnector.
-An error an interrupt signals there is ignored too; SB-EXT:TIMEOUT and non-local exits still take effect."
+Callers defer interrupts around it, so a pending interrupt cannot skip the disconnect; a non-local
+exit from the disconnector still takes effect."
   (let ((disconnector (pool-disconnector pool)))
     (when disconnector
       (ignore-errors (funcall disconnector conn)))))
@@ -369,14 +370,14 @@ they work in is counted as active meanwhile, so the pool never opens more than m
                       (release-idle-timer item)
                       (when (lendable-p pool owned created-at)
                         (return))
-                      ;; Ownership and the creation time are dropped together before disconnecting,
-                      ;; so an interrupt there frees the slot without a second disconnect.
+                      ;; Interrupts stay deferred from dropping ownership through the disconnect,
+                      ;; so a pending one cannot skip the disconnect.
                       (let ((conn owned))
-                        (bt2:with-lock-held (lock)
-                          (without-interrupts*
+                        (without-interrupts*
+                          (bt2:with-lock-held (lock)
                             (forget-created-at pool conn)
-                            (setf owned nil)))
-                        (disconnect-quietly pool conn)))
+                            (setf owned nil))
+                          (disconnect-quietly pool conn))))
                      (:open
                       ;; Interrupts are deferred from the connector's return until CONN is OWNED,
                       ;; so the cleanup disconnects it; a deadline at the lock grab would drop it
@@ -395,8 +396,7 @@ they work in is counted as active meanwhile, so the pool never opens more than m
              (setf lent owned
                    owned nil))
         (unless lent
-          ;; The disconnector may exit non-locally; the slot is freed regardless. Interrupts are
-          ;; allowed only in the disconnect, which can block and must stay cancellable.
+          ;; The disconnector may exit non-locally; the slot is freed regardless.
           (without-deadline
             (unwind-protect
                  (when owned
@@ -404,7 +404,7 @@ they work in is counted as active meanwhile, so the pool never opens more than m
                      (bt2:with-lock-held (lock)
                        (setf owned nil)
                        (forget-created-at pool conn))
-                     (with-local-interrupts* (disconnect-quietly pool conn))))
+                     (disconnect-quietly pool conn)))
               (when held
                 (release-slot pool)))))))
     lent))
@@ -432,7 +432,7 @@ The slot is held until FN returns so a waiter cannot open a replacement while th
   `(defun ,name (conn pool)
      (declare (type ,pool-type pool))
      ;; Interrupted between the decision and its outcome, CONN would be neither queued nor its
-     ;; slot freed. Only the disconnect, which does I/O, can be interrupted.
+     ;; slot freed. The disconnect is deferred too, so a pending interrupt cannot skip it.
      (without-deadline (without-interrupts*
        ,@(when before-putback (list before-putback))
        (with-slots (disconnector storage lock) pool
@@ -450,18 +450,17 @@ The slot is held until FN returns so a waiter cannot open a replacement while th
                      :enqueued)))
            (:enqueued
             (notify-waiter pool))
+           ;; The disconnects run with interrupts deferred, so a pending one cannot skip them.
            (:expired
             ;; Errors are ignored as for a failed ping; the connection is gone either way.
             (call-then-release-slot pool
                                     (lambda ()
-                                      (with-local-interrupts*
-                                        (disconnect-quietly pool conn)))))
+                                      (disconnect-quietly pool conn))))
            (:full
             (call-then-release-slot pool
                                     (lambda ()
-                                      (with-local-interrupts*
-                                        (when disconnector
-                                          (funcall disconnector conn))))))))))
+                                      (when disconnector
+                                        (funcall disconnector conn)))))))))
      (values)))
 
 (defun dequeue-timeout-resources (pool)
