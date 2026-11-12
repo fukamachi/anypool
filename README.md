@@ -83,6 +83,7 @@ New in 0.2.0:
 
 - `:max-lifetime` and `pool-max-lifetime`. See [max-lifetime](#max-lifetime).
 - On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting correct under interrupts. See [Interrupts](#interrupts).
+- On SBCL, if an interrupt stops `fetch` after `:connector` returns, the pool disconnects the new connection.
 - The package exports `resource-already-in-pool`.
 - The Lack middleware accepts `:max-lifetime`.
 - On SBCL, a deadline from `sb-sys:with-deadline` cannot stop the cleanups of the pool.
