@@ -147,13 +147,16 @@ Send an in-use connection back to `pool` to make it reusable by other threads. I
 
 ## Interrupts
 
-On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting correct when the thread is interrupted, for example by `sb-ext:with-timeout` or `interrupt-thread`. The connector, the ping, the disconnector and the body of `with-connection` can still be interrupted.
+On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting correct when the thread is interrupted, for example by `sb-ext:with-timeout` or `interrupt-thread`. The connector, the ping and the body of `with-connection` can still be interrupted.
 
 - Use `with-connection` where you can. It defers interrupts from the moment `fetch` returns until the connection is bound, and while it is put back. If you call `fetch` and `putback` directly, an interrupt between `fetch` returning and your code taking the connection loses the connection and its slot.
 - If `conn` in `with-connection` names a special variable, it is bound to `nil` while `fetch` runs.
-- An interrupt while a retired connection is being disconnected can leave that physical connection open. The pool's counts stay correct.
-- Where the pool ignores errors from `:disconnector` (after a failed ping, for an expired connection), it ignores every `error` signalled during the disconnect, including one that an interrupt function signals there. Conditions that are not errors, such as `sb-ext:timeout` from `sb-ext:with-timeout`, and non-local exits such as `throw` still take effect.
+- Where the pool ignores errors from `:disconnector` (after a failed ping, for an expired connection), it ignores every `error` that the disconnect signals. A non-local exit from the disconnector, such as `throw`, still takes effect.
 - On other implementations there is no protection against interrupts.
+
+The pool cannot protect work inside `:connector` and `:disconnector`:
+- The pool runs `:disconnector` with interrupts deferred, so `with-timeout` cannot stop it. Give it its own timeout, for example a socket timeout.
+- An interrupt can stop `:connector` after it opens a connection and before it returns. The pool never gets that connection, so it cannot close it. Use `unwind-protect` in `:connector` to close the connection on a non-local exit.
 
 ## max-lifetime
 
