@@ -71,6 +71,29 @@ This software is still ALPHA quality. The APIs will be likely to change.
              :max-lifetime (* 5 60 1000)))
 ```
 
+## Changes in 0.2.0
+
+These changes can break code that worked with 0.1:
+
+- `:connector` and `:ping` run without the pool lock. The pool can call them from several threads at the same time, so they must be thread-safe. In 0.1, the pool called them one at a time.
+- `:connector` must return a non-`nil` object. If it returns `nil`, `fetch` returns `nil` and frees the slot.
+- If `:ping` signals an error, the pool disconnects that connection, and the error propagates from `fetch`. In 0.1, the pool dropped the connection without a disconnect.
+- On SBCL, `sb-ext:with-timeout` cannot stop a `:disconnector` that blocks. The pool runs the disconnect with interrupts deferred. In 0.1, an interrupt could stop it.
+- If fetches wait and each borrower holds its connection for almost no time, the throughput is lower than in 0.1. Each return waits for a switch to the next waiting thread.
+
+New in 0.2.0:
+
+- `:max-lifetime` and `pool-max-lifetime`. See [max-lifetime](#max-lifetime).
+- On SBCL, `fetch`, `putback` and `with-connection` keep their slot accounting correct under interrupts. See [Interrupts](#interrupts).
+- On SBCL, if an interrupt stops `fetch` after `:connector` returns, the pool disconnects the new connection.
+- On SBCL, an interrupt cannot leave a retired connection open. The pool disconnects it before the interrupt takes effect.
+- The package exports `resource-already-in-pool`.
+- The Lack middleware accepts `:max-lifetime`.
+- The Lack middleware binds the connection with `with-connection`, so an interrupt cannot lose its slot.
+- On SBCL, a deadline from `sb-sys:with-deadline` cannot stop the cleanups of the pool.
+- Waiting `fetch` calls receive connections in the order that they started to wait. A thread that returns a connection cannot take it again ahead of them.
+- On CCL, a `fetch` that waits for a free slot works. In 0.1, it failed with a type error.
+
 ## API
 
 ### [Constructor] make-pool (&key name connector disconnector ping max-open-count max-idle-count timeout idle-timeout max-lifetime)
