@@ -79,6 +79,7 @@ These changes can break code that worked with 0.1:
 - `:connector` must return a non-`nil` object. If it returns `nil`, `fetch` returns `nil` and frees the slot.
 - If `:ping` signals an error, the pool disconnects that connection, and the error propagates from `fetch`. In 0.1, the pool dropped the connection without a disconnect.
 - On SBCL, `sb-ext:with-timeout` cannot stop a `:disconnector` that blocks. The pool runs the disconnect with interrupts deferred. In 0.1, an interrupt could stop it.
+- If fetches wait and each borrower holds its connection for almost no time, the throughput is lower than in 0.1. Each return waits for a switch to the next waiting thread.
 
 New in 0.2.0:
 
@@ -91,7 +92,6 @@ New in 0.2.0:
 - The Lack middleware binds the connection with `with-connection`, so an interrupt cannot lose its slot.
 - On SBCL, a deadline from `sb-sys:with-deadline` cannot stop the cleanups of the pool.
 - Waiting `fetch` calls receive connections in the order that they started to wait. A thread that returns a connection cannot take it again ahead of them.
-- If fetches wait and each borrower holds its connection for almost no time, the throughput is lower than in 0.1. Each return waits for a switch to the next waiting thread.
 - On CCL, a `fetch` that waits for a free slot works. In 0.1, it failed with a type error.
 
 ## API
