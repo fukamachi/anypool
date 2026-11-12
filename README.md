@@ -90,6 +90,9 @@ New in 0.2.0:
 - The Lack middleware accepts `:max-lifetime`.
 - The Lack middleware binds the connection with `with-connection`, so an interrupt cannot lose its slot.
 - On SBCL, a deadline from `sb-sys:with-deadline` cannot stop the cleanups of the pool.
+- Waiting `fetch` calls receive connections in the order that they started to wait. A thread that returns a connection cannot take it again ahead of them.
+- If fetches wait and each borrower holds its connection for almost no time, the throughput is lower than in 0.1. Each return waits for a switch to the next waiting thread.
+- On CCL, a `fetch` that waits for a free slot works. In 0.1, it failed with a type error.
 
 ## API
 
