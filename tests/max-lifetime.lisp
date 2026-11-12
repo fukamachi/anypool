@@ -298,7 +298,7 @@
                           args))
              (advance (install-manual-clock pool))
              (conn (fetch pool))
-             (waiter (start-waiting-fetch (lambda () (fetch pool)) (pool-lock pool))))
+             (waiter (start-waiting-fetch (lambda () (fetch pool)))))
         (funcall advance 5000)
         (putback conn pool)
         (let ((result (bt2:join-thread waiter)))
