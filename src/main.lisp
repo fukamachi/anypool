@@ -85,12 +85,18 @@ lock grab even with interrupts deferred, so a cleanup it cut short would lose a 
   storage ; queue object
   (active-count 0 :type fixnum)
   (lock (bt2:make-lock :name "ANYPOOL-LOCK"))
-  (wait-lock (bt2:make-lock :name "ANYPOOL-OPENWAIT-LOCK"))
-  (wait-condvar (bt2:make-condition-variable :name "ANYPOOL-OPENWAIT"))
+  ;; Waiting fetches, oldest first. A freed slot or a returned connection goes to the first one.
+  (waiters '())
   (lifetime-limit nil :read-only t) ; max-lifetime * internal-time-units-per-second, exact
   ;; Connection -> creation time. Kept apart from ITEM, which lives for one idle period only.
   (created-at-table nil :read-only t)
   (clock #'get-internal-real-time))
+
+(defstruct (waiter (:constructor make-waiter ()))
+  (condvar (bt2:make-condition-variable :name "ANYPOOL-WAITER"))
+  ;; What was handed over: :SLOT, or :CONNECTION with CONNECTION. The slot comes with either.
+  (grant nil)
+  (connection nil))
 
 (defstruct (pool-without-timeout
             (:include pool)
@@ -283,31 +289,30 @@ queue item, or NIL when none is left. A dequeued item is marked active so its id
   (or (pool-unlimited-p pool)
       (< (pool-open-count pool) (pool-max-open-count pool))))
 
-(defun wait-for-slot (pool)
-  "With the pool lock held, wait until a slot may have been freed; the lock is held again on return.
-Return NIL when TIMEOUT runs out, so the caller can signal after releasing the lock."
-  (with-slots (lock timeout wait-lock wait-condvar) pool
+(defun wait-for-slot (pool waiter)
+  "With the pool lock held, wait until something may have been handed to WAITER. Return NIL when
+TIMEOUT runs out, so the caller can signal after releasing the lock."
+  (with-slots (lock timeout) pool
     (unless (and (numberp timeout)
                  (zerop timeout))
-      ;; SBCL's mutex release and grab are not interrupt-safe: interrupted halfway, LOCK is left
-      ;; taken by no thread and every later fetch hangs. Interrupts are allowed only while sleeping.
+      ;; After a timeout BT2 takes LOCK again with GRAB-MUTEX, which SBCL makes interrupt-safe
+      ;; only with interrupts deferred around it. An interrupt during the wait itself can unwind
+      ;; with LOCK released; the caller's WITH-LOCK-HELD expects that.
       (without-interrupts*
-        (unwind-protect
-             #+ccl
-             (progn
-               (bt2:release-lock lock)
-               (if timeout
-                   (ccl:timed-wait-on-semaphore wait-condvar (/ timeout 1000d0))
-                   (ccl:wait-on-semaphore wait-condvar)))
-             #-ccl
-             ;; WAIT-LOCK is taken before LOCK is released: putback notifies under
-             ;; WAIT-LOCK, so its wakeup cannot fall between our check and the wait.
-             (bt2:with-lock-held (wait-lock)
-               (bt2:release-lock lock)
-               (allow-with-interrupts*
-                 (bt2:condition-wait wait-condvar wait-lock
-                                     :timeout (and timeout (/ timeout 1000d0)))))
-          (allow-with-interrupts* (bt2:acquire-lock lock)))))))
+        (allow-with-interrupts*
+          (bt2:condition-wait (waiter-condvar waiter) lock
+                              :timeout (and timeout (/ timeout 1000d0))))))))
+
+(defun hand-off (pool grant &optional connection)
+  "With the pool lock held, give a slot, and CONNECTION when GRANT is :CONNECTION, to the oldest
+waiter and wake only it. Return NIL when nobody waits. A thread that frees a slot cannot take it
+back ahead of the waiters, so every waiter is served in turn."
+  (let ((waiter (pop (pool-waiters pool))))
+    (when waiter
+      (setf (waiter-grant waiter) grant
+            (waiter-connection waiter) connection)
+      (bt2:condition-notify (waiter-condvar waiter))
+      t)))
 
 (defun release-idle-timer (item)
   "Stop the idle timer of ITEM, which fetch has taken out. Called without the pool lock, which the
@@ -321,11 +326,14 @@ timer callback takes."
 (defun fetch (pool)
   "Fetch a connection from the pool.
 PING and CONNECTOR run without the pool lock, so a slow or stuck one delays only this call. The slot
-they work in is counted as active meanwhile, so the pool never opens more than max-open-count."
+they work in is counted as active meanwhile, so the pool never opens more than max-open-count.
+Waiting calls are served oldest first: a returned connection or a freed slot goes straight to the
+oldest one, so a thread that gives one back cannot take it again ahead of them."
   (let ((lock (pool-lock pool))
         (held nil)                      ; this call owns a slot counted in ACTIVE-COUNT
         (owned nil)                     ; a connection only this call holds
-        (lent nil))
+        (lent nil)
+        (waiter nil))                   ; this call's place in the waiters queue
     (without-interrupts*
       (unwind-protect
            (progn
@@ -339,26 +347,47 @@ they work in is counted as active meanwhile, so the pool never opens more than m
                        ;; Counts change together with HELD and OWNED; an interrupt in between
                        ;; would leak the slot or free it twice.
                        (without-interrupts*
-                         (multiple-value-bind (conn conn-created-at conn-item) (take-idle pool)
-                           (cond
-                             (conn
-                              (unless held
-                                (incf (pool-active-count pool))
-                                (setf held t))
-                              (setf owned conn
-                                    created-at conn-created-at
-                                    item conn-item
-                                    action :check))
-                             ;; A slot kept after retiring a connection is used, never waited
-                             ;; with, or every slot could end up held by a waiter.
-                             ((or held (can-open-p pool))
-                              (unless held
-                                (incf (pool-active-count pool))
-                                (setf held t))
-                              (setf action :open)))))
+                         (cond
+                           ;; Something was handed to this call; its slot comes with it.
+                           ((and waiter (waiter-grant waiter))
+                            (setf held t)
+                            (ecase (waiter-grant waiter)
+                              (:connection
+                               (setf owned (waiter-connection waiter)
+                                     created-at (created-at pool owned)
+                                     action :check))
+                              (:slot
+                               (setf action :open)))
+                            (setf waiter nil))
+                           ;; Nothing is free while others wait, so a new fetch queues behind them.
+                           ((or held (null (pool-waiters pool)))
+                            (multiple-value-bind (conn conn-created-at conn-item) (take-idle pool)
+                              (cond
+                                (conn
+                                 (unless held
+                                   (incf (pool-active-count pool))
+                                   (setf held t))
+                                 (setf owned conn
+                                       created-at conn-created-at
+                                       item conn-item
+                                       action :check))
+                                ;; A slot kept after retiring a connection is used, never waited
+                                ;; with, or every slot could end up held by a waiter.
+                                ((or held (can-open-p pool))
+                                 (unless held
+                                   (incf (pool-active-count pool))
+                                   (setf held t))
+                                 (setf action :open)))))))
                        (when action
                          (return))
-                       (unless (wait-for-slot pool)
+                       (without-interrupts*
+                         (unless waiter
+                           (setf waiter (make-waiter))
+                           (setf (pool-waiters pool)
+                                 (nconc (pool-waiters pool) (list waiter)))))
+                       ;; A grant that arrives together with the timeout is still taken.
+                       (unless (or (wait-for-slot pool waiter)
+                                   (waiter-grant waiter))
                          (return))))
                    ;; Signalled outside the lock: handlers may do I/O, and every fetch and putback
                    ;; would wait for them.
@@ -399,30 +428,40 @@ they work in is counted as active meanwhile, so the pool never opens more than m
           ;; The disconnector may exit non-locally; the slot is freed regardless.
           (without-deadline
             (unwind-protect
-                 (when owned
-                   (let ((conn owned))
-                     (bt2:with-lock-held (lock)
-                       (setf owned nil)
-                       (forget-created-at pool conn))
-                     (disconnect-quietly pool conn)))
+                 (progn
+                   ;; Leaving the queue, pass on anything handed over but not taken yet.
+                   (when waiter
+                     (let ((connection nil))
+                       (bt2:with-lock-held (lock)
+                         (setf (pool-waiters pool) (delete waiter (pool-waiters pool)))
+                         (case (waiter-grant waiter)
+                           (:slot (setf held t))
+                           (:connection (setf connection (waiter-connection waiter))))
+                         (setf (waiter-grant waiter) nil
+                               (waiter-connection waiter) nil
+                               waiter nil))
+                       (when connection
+                         (putback connection pool))))
+                   (when owned
+                     (let ((conn owned))
+                       (bt2:with-lock-held (lock)
+                         (setf owned nil)
+                         (forget-created-at pool conn))
+                       (disconnect-quietly pool conn))))
               (when held
                 (release-slot pool)))))))
     lent))
 
-(defun notify-waiter (pool)
-  (bt2:with-lock-held ((pool-wait-lock pool))
-    (bt2:condition-notify (pool-wait-condvar pool))))
-
 (defun release-slot (pool)
-  "Free one slot counted in ACTIVE-COUNT and wake a waiter to claim it."
+  "Free one slot counted in ACTIVE-COUNT, or hand it to the oldest waiter."
   (without-deadline
     (without-interrupts*
       (bt2:with-lock-held ((pool-lock pool))
-        (decf (pool-active-count pool)))
-      (notify-waiter pool))))
+        (unless (hand-off pool :slot)
+          (decf (pool-active-count pool)))))))
 
 (defun call-then-release-slot (pool fn)
-  "Call FN, then free the slot of a lent-out connection and wake a waiter even if FN fails.
+  "Call FN, then free the slot of a lent-out connection, or hand it to a waiter, even if FN fails.
 The slot is held until FN returns so a waiter cannot open a replacement while the old one is still open."
   (unwind-protect (funcall fn)
     (release-slot pool)))
@@ -444,12 +483,13 @@ The slot is held until FN returns so a waiter cannot open a replacement while th
                     ((queue-full-p storage)
                      (forget-created-at pool conn)
                      :full)
+                    ((hand-off pool :connection conn)
+                     :handed-off)
                     (t
                      ,enqueue-logic
                      (decf (pool-active-count pool))
                      :enqueued)))
-           (:enqueued
-            (notify-waiter pool))
+           ((:enqueued :handed-off))
            ;; The disconnects run with interrupts deferred, so a pending one cannot skip them.
            (:expired
             ;; Errors are ignored as for a failed ping; the connection is gone either way.
